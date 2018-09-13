@@ -300,9 +300,9 @@ checkConfig() {
 
     # SavedDnL directory
     if [ -n "$dnlserverroot" ]; then
-      local saveddnlsdir="${dnlserverroot}/DNL/Saved/${dnl_AltSaveDirectoryName:-SavedDnL}"
-      mkdir -p "${saveddnlsdir}"
-      if [ ! -w "${saveddnlsdir}" ]; then
+      local saveddnldir="${dnlserverroot}/DNL/Saved/${dnl_AltSaveDirectoryName:-SavedDnL}"
+      mkdir -p "${saveddnldir}"
+      if [ ! -w "${saveddnldir}" ]; then
         echo -e "[" "$RED" "ERROR" "$NORMAL" "]" "\tThe DnL SavedDnL directory is not writable, and saveworld will fail"
       fi
     fi
@@ -361,7 +361,7 @@ getAdminPassword() {
 # Get server RCON Port
 #
 getRconPort() {
-  getDnLServerSetting "RCONPort" "32330"
+  getDnLServerSetting "RCONPort" ""
 }
 
 #
