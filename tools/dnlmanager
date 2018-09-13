@@ -1865,7 +1865,7 @@ doUpdate() {
         fi
         cd "$dnlserverroot"
         find Engine DNL linux64 -depth -print |
-          grep -v '^\(DNL/\(Saved\|Content/Mods\|Binaries/Linux/.*\.txt\)\|Engine/Binaries/ThirdParty/SteamCMD/Linux/steamapps\)' |
+          grep -v '^\(DNL/\(Saved\|Content/Mods\|Binaries/Win64/.*\.txt\)\|Engine/Binaries/ThirdParty/SteamCMD/Linux/steamapps\)' |
           while read f; do
             if [ ! -e "${dnlStagingDir}/${f}" ]; then
               if [ -f "$f" ]; then
