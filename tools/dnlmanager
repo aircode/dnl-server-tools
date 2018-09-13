@@ -937,7 +937,7 @@ doRun() {
   fi
 
   if [ -z "$dnlserveropts" ]; then
-    dnlserveropts=""
+    dnlserveropts="DNL_ALL"
   fi
 
   dnlextraopts=( )
