@@ -7,14 +7,14 @@ dnlserverroot="/home/steam/DnL"                                     # path of yo
 #serverMap="" 			                                            # server map (default)
 #serverMapModId="469987622"                                         # Uncomment this to specify the Map Mod Id (<fileid> in http://steamcommunity.com/sharedfiles/filedetails/?id=<fileid>)
 #dnl_TotalConversionMod="496735411"                                 # Uncomment this to specify a total-conversion mod
-dnl_RCONEnabled="True"                                              # Enable RCON Protocol
-dnl_RCONPort="32330"                                                # RCON Port
-dnl_SessionName="YOUR_SESSION_NAME"                                 # if your session name needs special characters please use the .ini instead
-dnl_Port="7778"                                                     # DnL server port (default 7778)
-dnl_QueryPort="27015"                                               # DnL query port (default 27015)
-dnl_ServerPassword=""                                               # DnL server password, empty: no password required to login
-dnl_ServerAdminPassword="password" 		                            # DnL server admin password, KEEP IT SAFE!
-dnl_MaxPlayers="15"
+#dnl_RCONEnabled="True"                                              # Enable RCON Protocol
+#dnl_RCONPort="32330"                                                # RCON Port
+#dnl_SessionName="YOUR_SESSION_NAME"                                 # if your session name needs special characters please use the .ini instead
+#dnl_Port="7778"                                                     # DnL server port (default 7778)
+#dnl_QueryPort="27015"                                               # DnL query port (default 27015)
+#dnl_ServerPassword=""                                               # DnL server password, empty: no password required to login
+#dnl_ServerAdminPassword="password" 		                            # DnL server admin password, KEEP IT SAFE!
+#dnl_MaxPlayers="15"
 #dnl_GameModIds="487516323,487516324,487516325"                     # Uncomment to specify additional mods by Mod Id separated by commas
 #dnl_AltSaveDirectoryName="for_your_instance"                       # Uncomment to specify a different save directory name
 
