@@ -1,0 +1,12 @@
+[Unit]
+Description=Starts and stops all dnl server instances
+After=network.target
+
+[Service]
+ExecStart=/usr/libexec/dnlmanager/dnlmanager.init start
+ExecStop=/usr/libexec/dnlmanager/dnlmanager.init stop
+Type=forking
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,3351 @@
+#!/bin/bash
+
+# DnL manager
+#
+# Original author:      LeXaT
+# Maintainer:           Coyeks
+# Contributors:         Sispheor, Atriusftw, klightspeed, lexat, puseidr
+
+# Script version
+dnlstVersion='1.6'
+dnlstTag=''
+dnlstCommit=''
+dnlstGithubRepo="Coyeks/dnl-server-tools"
+dnlstRootUseEnv=''
+dnlstGlobalCfgFile='/etc/dnlmanager/dnlmanager.cfg'
+dnlstUserCfgFile='.dnlmanager.cfg'
+
+doUpgradeTools() {
+  local sudo=sudo
+  if [ $(id -u) == 0 -o "$steamcmd_user" == "--me" ]; then
+    sudo=
+  fi
+
+  local reinstall_args=()
+  if [ -n "$install_bindir" ]; then
+    reinstall_args=( "${reinstall_args[@]}" "--bindir" "$install_bindir" )
+  fi
+  if [ -n "$install_libexecdir" ]; then
+    reinstall_args=( "${reinstall_args[@]}" "--libexecdir" "$install_libexecdir" )
+  fi
+  if [ -n "$install_datadir" ]; then
+    reinstall_args=( "${reinstall_args[@]}" "--datadir" "$install_datadir" )
+  fi
+
+  echo "dnlmanager v${dnlstVersion}: Checking for updates..."
+
+  if [ -n "$dnlstUnstable" ] || [ "$dnlstChannel" != "master" ]; then
+    doUpgradeToolsFromBranch
+  else
+    doUpgradeToolsFromRelease
+  fi
+}
+
+doUpgradeToolsFromCommit(){
+  local sudo=sudo
+  if [ $(id -u) == 0 -o "$steamcmd_user" == "--me" ]; then
+    sudo=
+  fi
+
+  local commit="$1"
+  tmpdir="$(mktemp -d "dnl-server-tools-XXXXXXXX")"
+  if [ -z "$tmpdir" ]; then echo "Unable to create temporary directory"; exit 1; fi
+  cd "$tmpdir"
+  echo "Downloading installer"
+  curl -s -L "https://github.com/${dnlstGithubRepo}/archive/${commit}.tar.gz" | tar -xz
+  cd "dnl-server-tools-${commit}/tools"
+  if [ ! -f "install.sh" ]; then echo "install.sh not found in $PWD"; exit 1; fi
+  sed -i -e "s|^dnlstCommit='.*'|dnlstCommit='${commit}'|" \
+         -e "s|^dnlstTag='.*'|dnlstTag='${tagname}'|" \
+         -e "s|^dnlstRootUseEnv='.*'|dnlstRootUseEnv='${dnlstRootUseEnv}'|" \
+         dnlmanager
+  echo "Running install.sh"
+  $sudo bash install.sh "$steamcmd_user" "${reinstall_args[@]}"
+  result=$?
+  cd /
+  rm -rf "$tmpdir"
+
+  if [ "$result" = 0 ] || [ "$result" = 2 ]; then
+    echo "DnL Server Tools successfully upgraded"
+    "$0" --version
+  else
+    echo "DnL Server Tools upgrade failed"
+  fi
+  exit $result
+}
+
+doUpgradeToolsFromBranch(){
+  dnlstLatestVersion=`curl -s "https://raw.githubusercontent.com/${dnlstGithubRepo}/${dnlstChannel}/.version"`
+  dnlstLatestCommit=`curl -s "https://api.github.com/repos/${dnlstGithubRepo}/git/refs/heads/${dnlstChannel}" | sed -n 's/^ *"sha": "\(.*\)",.*/\1/p'`
+
+  if [[ "$dnlstLatestVersion" == "404: Not Found" ]]; then
+    echo "Channel '${dnlstChannel}' does not exist"
+    echo
+    echo "Available channels:"
+    curl -s "https://api.github.com/repos/${dnlstGithubRepo}/git/refs/heads" | sed -n 's|^ *"ref": "refs/heads/\(.*\)",|\1|p'
+    echo
+    return
+  fi
+
+  REPLY=
+
+  if [[ $dnlstLatestVersion > $dnlstVersion ]]; then
+    read -p "A new version was found! Do you want to upgrade DnL Server Tools to v${dnlstLatestVersion}?" -n 1 -r
+    echo
+  elif [[ $dnlstLatestVersion == $dnlstVersion && "$dnlstLatestCommit" != "$dnlstCommit" ]]; then
+    read -p "A hotfix is available for v${dnlstLatestVersion}.  Do you wish to install it?" -n 1 -r
+    echo
+  else
+    echo "Your DnL server tools are already up to date"
+  fi
+
+  if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+    doUpgradeToolsFromCommit "$dnlstLatestCommit"
+  fi
+}
+
+doUpgradeToolsFromRelease(){
+  local tagname=
+  local desc=
+
+  echo "Getting latest release..."
+  # Read the variables from github
+  while IFS=$'\t' read -r n v; do
+    case "${n}" in
+      tag_name) tagname="${v}"; ;;
+      body) desc="${v}"
+    esac
+  done < <(curl -s "https://api.github.com/repos/${dnlstGithubRepo}/releases/latest" | sed -n 's/^  "\([^"]*\)": "*\([^"]*\)"*,*/\1\t\2/p')
+
+  if [ -n "$tagname" ]; then
+    if [ "$tagname" != "$dnlstTag" ]; then
+      echo "A new version has been released: ${tagname}"
+      echo -e "$desc"
+      read -p "Do you want to upgrade to ${tagname}? [Y/N] " -n 1 -r
+      echo
+      if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+        echo "Getting commit for latest release..."
+        local commit="$(curl -s "https://api.github.com/repos/${dnlstGithubRepo}/git/refs/tags/${tagname}" | sed -n 's/^ *"sha": "\(.*\)",.*/\1/p')"
+        doUpgradeToolsFromCommit "$commit"
+      fi
+    else
+      echo "Your DnL server tools are already up to date"
+    fi
+  else
+    echo "Unable to get latest release"
+  fi
+}
+
+doUninstallTools() {
+  local sudo=sudo
+  if [ $(id -u) == 0 -o "$steamcmd_user" == "--me" ]; then
+    sudo=
+  fi
+
+  read -p "Are you sure you want to uninstall the DnL Server Tools? [y/N]" -n 1 -r
+
+  if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+    if [ -n "${install_datadir}" -a -x "${install_datadir}/dnlmanager-uninstall.sh" ]; then
+      $sudo "${install_datadir}/dnlmanager-uninstall.sh"
+      exit 0
+    elif [ -n "${install_libexecdir}" -a -x "${install_libexecdir}/dnlmanager-uninstall.sh" ]; then
+      $sudo "${install_libexecdir}/dnlmanager-uninstall.sh"
+      exit 0
+    fi
+  fi
+}
+
+runAsRoot(){
+  getConfigVar(){
+    val="$(echo -ne "$(sed -n "/^$1=/{s|^[^=]*=||;s|[[:space:]]*\\(#.*\\)*\$||;s|^\"\\(.*\\)\"\$|\\1|;s|^'\\(.*\\)'\$|\\1|;p}" <"${dnlstGlobalCfgFile}" | tail -n1)")"
+
+    if [ -n "$dnlstRootUseEnv" ]; then
+      val="$(eval printf "%s" "$(printf "%q" "${val}" | sed 's|\\[$]\\[{]\([A-Za-z][A-Za-z0-9_]*\)\\[}]|${\1}|g;s|\\[$]\([A-Za-z][A-Za-z0-9_]*\)|${\1}|g')")"
+    fi
+
+    if [ -n "$val" ]; then
+      echo "$val"
+    else
+      echo "$2"
+    fi
+  }
+
+  cd /
+
+  dnlstChannel="$(getConfigVar dnlstChannel "master")"
+  dnlstUnstable="$(getConfigVar dnlstUnstable "")"
+  install_bindir="$(getConfigVar install_bindir "${0%/*}")"
+  install_libexecdir="$(getConfigVar install_libexecdir "${install_bindir%/*}/libexec/dnlmanager")"
+  install_datadir="$(getConfigVar install_datadir "${install_bindir%/*}/share/dnlmanager")"
+  steamcmd_user="$(getConfigVar steamcmd_user "steam")"
+  steamcmd_user_shellexec="$(getConfigVar steamcmd_user_shellexec "${BASH:-/bin/bash}")"
+
+  if ! getent passwd "$steamcmd_user" >/dev/null 2>&1; then
+    echo "Invalid steamcmd_user in config file"
+    exit 1
+  fi
+
+  if [ "$1" == "upgrade-tools" ]; then
+    doUpgradeTools
+  elif [ "$1" == "uninstall-tools" ]; then
+    doUninstallTools
+  else
+    su "$steamcmd_user" -s "$steamcmd_user_shellexec" -c "$(printf "%q" "$0")$(printf " %q" "$@")"
+    exit 1
+  fi
+}
+
+# Check the user is not currently running this script as root
+if [ "$(id -u)" == "0" ]; then
+  runAsRoot "$@"
+  exit 0
+fi
+
+#---------------------
+# Variables
+#---------------------
+
+# Global variables
+if [ -f "${dnlstGlobalCfgFile}" ]; then
+    source "${dnlstGlobalCfgFile}"
+fi
+
+if [ -f "${HOME}/${dnlstUserCfgFile}" ]; then
+    source "${HOME}/${dnlstUserCfgFile}"
+fi
+
+cd "$HOME"
+
+lsof=lsof
+if [ -x /usr/sbin/lsof ]; then
+  lsof=/usr/sbin/lsof
+fi
+
+# Local variables
+instver=""
+bnumber=""
+GREEN="\\033[1;32m"
+RED="\\033[1;31m"
+YELLOW="\\e[0;33m"
+NORMAL="\\033[0;39m"
+maxOpenFiles=100000
+
+# Set TERM to "dumb" if TERM is not set
+export TERM=${TERM:-dumb}
+
+dnlmanagerLog="dnlmanager.log"  # here are logged the actions performed by dnlmanager
+dnlserverLog="dnlserver.log"    # here is logged the output of DNLServer
+
+appid="${appid:-630230}"
+mod_appid="${mod_appid:-529180}"
+install_bindir="${install_bindir:-${0%/*}}"
+install_libexecdir="${install_libexecdir:-${install_bindir%/*}/libexec/dnlmanager}"
+steamcmd_workshoplog="${steamcmd_workshoplog:-${HOME}/Steam/logs/workshop_log.txt}"
+
+if [ "$steamcmd_user" == "--me" ]; then
+  install_datadir="${install_datadir:-${HOME}/.share/local/dnlmanager}"
+else
+  install_datadir="${install_datadir:-${install_bindir%/*}/share/dnlmanager}"
+fi
+
+declare -A modsrcdirs
+
+#---------------------
+# functions
+#---------------------
+
+#
+# timestamp
+#
+timestamp() {
+  date +"%Y-%m-%d %H:%M:%S"
+}
+
+#
+# Log a message to dnlmanager.log, and exho it to the console
+#
+logprint(){
+  printf "%s\n" "$*"
+  printf "%s: [%s] %s\n" "$(timestamp)" "${instance}" "$*" >>"${logdir}/${dnlmanagerLog}"
+}
+
+#
+# check configuration and report errors
+#
+checkConfig() {
+  # SteamCMD configuration
+  # steamcmdroot
+  if [ ! -d "$steamcmdroot" ] ; then
+    echo -e "[" "$RED" "ERROR" "$NORMAL" "]" "\tYour SteamCMD root seems not valid."
+  fi
+  # steamcmdexec
+  if [ ! -f "$steamcmdroot/$steamcmdexec" ] ; then
+    echo -e "[" "$RED" "ERROR" "$NORMAL" "]" "\tYour SteamCMD exec could not be found."
+  fi
+  # steamcmd_user
+  if [ "$steamcmd_user" != "--me" ]; then
+    if ! getent passwd $steamcmd_user > /dev/null 2>&1 ; then
+      echo -e "[" "$RED" "ERROR" "$NORMAL" "]" "\tYour SteamCMD user is not valid."
+    fi
+  fi
+
+  # Environment configuration
+  if [ "$1" != "install" ]; then
+    # dnlserverexec
+    if [ -n "$dnlserverroot" ] && [ ! -f "$dnlserverroot/$dnlserverexec" ] ; then
+      echo -e "[" "$YELLOW" "WARN" "$NORMAL" "]" "\tYour DnL server exec could not be found."
+    fi
+
+    # SavedDnLs directory
+    if [ -n "$dnlserverroot" ]; then
+      local saveddnlsdir="${dnlserverroot}/DNL/Saved/${dnl_AltSaveDirectoryName:-SavedDnLs}"
+      mkdir -p "${saveddnlsdir}"
+      if [ ! -w "${saveddnlsdir}" ]; then
+        echo -e "[" "$RED" "ERROR" "$NORMAL" "]" "\tThe DnL SavedDnLs directory is not writable, and saveworld will fail"
+      fi
+    fi
+
+    if [ "$1" != "installmod" ] && [ "$1" != "installmods" ]; then
+      # Warn if any mods are requested but not installed
+      if [ -n "$dnlserverroot" -a -d "${dnlserverroot}/DNL/Content/Mods" ]; then
+        for modid in $(getModIds); do
+          if [ ! -f "${dnlserverroot}/DNL/Content/Mods/${modid}/mod.info" ]; then
+            echo -e "[" "$RED" "ERROR" "$NORMAL" "]" "\tMod ${modid} is requested but not installed.  Run 'dnlmanager installmod ${modid}' to install this mod."
+          fi
+        done
+      fi
+    fi
+  fi
+
+  # Warn if mod_branch=Linux
+  if [ "$mod_branch" == "Linux" -a -z "$nowarnmodbranch" ]; then
+    echo -e "[" "$YELLOW" "WARN" "$NORMAL" "]" "\tmod_branch is set to Linux. Linux mods are known to cause the server to crash. It is suggested you set mod_branch to Windows."
+  fi
+
+  # Service configuration
+  # logdir
+  if [ ! -w "$logdir" ] ; then
+    echo -e "[" "$RED" "ERROR" "$NORMAL" "]" "\tYou have not rights to write in the log directory."
+  fi
+}
+
+#
+# Get setting from config or from ini file
+# $1 is the setting name
+# $2 is the default
+#
+getDnLServerSetting() {
+  local varname="dnl_$1"
+  if [ -n "${!varname}" ]; then
+    echo "${!varname}"
+  else
+    local val="$(tr -d '\0\376\377' <"${dnlserverroot}/DNL/Saved/Config/WindowsServer/GameUserSettings.ini" | sed -n '/^\[ServerSettings\]/,/^\[.*\]/{s/^'"$1"'[[:space:]]*=[[:space:]]*//p;}' )"
+    if [ -n "$val" ]; then
+      echo "$val"
+    else
+      echo "$2"
+    fi
+  fi
+}
+
+#
+# Get server admin password
+#
+getAdminPassword() {
+  getDnLServerSetting "ServerAdminPassword" ""
+}
+
+#
+# Get server RCON Port
+#
+getRconPort() {
+  getDnLServerSetting "RCONPort" "32330"
+}
+
+#
+# Get server Game Port
+#
+getGamePort() {
+  echo "${dnl_Port:-7778}"
+}
+
+#
+# Get server Query Port
+#
+getQueryPort(){
+  echo "${dnl_QueryPort:-27015}"
+}
+
+#
+# Execute RCON command
+#
+rconcmd() {
+  local adminpass="$(getAdminPassword)"
+  if [ -z "$adminpass" ]; then
+    echo "ServerAdminPassword is empty - unable to execute RCON command"
+    return 1
+  elif [[ "$adminpass" =~ [?\177-\377] ]]; then
+    echo "ServerAdminPassword contains invalid characters"
+    return 1
+  fi
+  perl -MSocket -e '
+    sub sendpkt {
+      my ($sock, $reqid, $reqtype, $body) = @_;
+      my $packet = pack("VVV", length($body) + 10, $reqid, $reqtype) . $body . "\0\0";
+      send($sock, $packet, 0) or die "Error sending command to server: $!";
+    }
+
+    sub recvpkt {
+      my ($sock) = @_;
+      my $data = "";
+      recv($sock, $data, 12, 0);
+      die "Empty response" if length($data) == 0;
+      my ($pktlen, $resid, $restype) = unpack("VVV", $data);
+      recv($sock, $data, $pktlen - 8, 0);
+      return ($resid, $restype, substr($data, 0, $pktlen - 10));
+    }
+
+    sub auth {
+      my ($sock, $password) = @_;
+      my $reqid = 1;
+      sendpkt($sock, $reqid, 3, $password);
+      my ($resid, $restype, $rcvbody) = recvpkt($sock);
+      die "Authentication failed" if $resid == -1 or $resid == 0xFFFFFFFF;
+    }
+
+    my $port = $ARGV[0];
+    my $ipaddr = $ARGV[1];
+    my $password = $ARGV[2];
+    my $command = $ARGV[3];
+    socket(my $socket, PF_INET, SOCK_STREAM, 0);
+    setsockopt($socket, SOL_SOCKET, SO_RCVTIMEO, pack("i4", 30, 0, 0, 0));
+    my $sockaddr = pack_sockaddr_in($port, inet_aton($ipaddr));
+    connect($socket, $sockaddr) or die "Error connecting to server: $!";
+    auth($socket, $password);
+    sendpkt($socket, 2, 2, $command);
+    my ($resid, $restype, $rcvbody) = recvpkt($socket);
+    if ($rcvbody eq "Server received, But no response!! \n ") {
+      print "Command processed\n";
+    } else {
+      print "\"", $rcvbody, "\"\n";
+    }
+    ' "$(getRconPort)" "${dnl_MultiHome:-127.0.0.1}" "$adminpass" "$1"
+}
+
+#
+# Save world
+#
+doSaveWorld() {
+  rconcmd saveworld
+}
+
+#
+# Exit cleanly
+#
+doExitServer() {
+  rconcmd doexit
+}
+
+#
+# Broadcast message
+#
+doBroadcast(){
+  rconcmd "broadcast $1"
+}
+
+#
+# Broadcast message with echo
+#
+doBroadcastWithEcho(){
+  echo "$1"
+  doBroadcast "$1"
+}
+
+#
+# Download SteamCMD
+#
+function doDownloadSteamCMD(){
+  if [ ! -f "${steamcmdroot}/${steamcmdexec}" ]; then
+    mkdir -p "${steamcmdroot}"
+    curl -s "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz" -o "${steamcmdroot}/steamcmd_linux.tar.gz"
+    tar -xzf "${steamcmdroot}/steamcmd_linux.tar.gz" -C "${steamcmdroot}"
+  fi
+}
+
+#
+# SteamCMD helper function
+#
+function runSteamCMD(){
+  "$steamcmdroot/$steamcmdexec" +@NoPromptForPassword 1 ${steamcmd_cmds_prelogin} +login ${steamlogin:-anonymous} ${steamcmd_cmds_postlogin} "$@" +quit
+}
+
+function runSteamCMDspinner(){
+  if [ -n "$verbose" ]; then
+    printf "Executing"
+    printf " %q" "$steamcmdroot/$steamcmdexec" +@NoPromptForPassword 1 ${steamcmd_cmds_prelogin} +login ${steamlogin:-anonymous} ${steamcmd_cmds_postlogin} "$@" +quit
+    printf "\n"
+    if (command >&3) 2>/dev/null; then
+      runSteamCMD "$@" > >(tee /dev/fd/3)
+    else
+      runSteamCMD "$@"
+    fi
+    return $?
+  else
+    if [ -z "$progressDisplayType" ]; then
+      if stty <&2 >/dev/null 2>&1; then
+        progressDisplayType=spinner
+      else
+        progressDisplayType=dots
+      fi
+    fi
+    if (command >&3) 2>/dev/null; then
+      runSteamCMD "$@" >&3 &
+    else
+      runSteamCMD "$@" >/dev/null &
+    fi
+    local scpid=$!
+    local pos=0
+    local spinner=( '\b-' '\b/' '\b|' '\b\\' )
+    if [ "$progressDisplayType" == "dots" ]; then
+      spinner=( '.' )
+    fi
+    echo -n ' ...  '
+    while kill -0 $scpid 2>/dev/null; do
+      echo -ne "${spinner[$pos]}"
+      (( pos = (pos + 1) % ${#spinner[*]} ))
+      sleep 0.5
+    done
+    echo -ne '\b \b'
+    wait $scpid
+    return $?
+  fi
+}
+
+function runSteamCMDspinnerSubst(){
+  local fd="$1"
+  shift
+  runSteamCMDspinner "$@" 3>&1 >/dev/fd/${fd}
+}
+
+#
+# Check if a new version is available but not apply it
+#
+function checkForUpdate(){
+  tput sc
+  echo "Querying Steam database for latest version..."
+
+  if isUpdateNeeded; then
+    tput rc; tput ed;
+    echo -e "Current version:" "$RED" $instver "$NORMAL"
+    echo -e "Available version:" "$GREEN" $bnumber "$NORMAL"
+    echo -e "Your server needs to be restarted in order to receive the latest update."
+    echo -e "Run \"dnlmanager update\" to do so"
+    return 1
+  else
+    tput rc; tput ed;
+    echo -e "Current version:" "$GREEN" $instver "$NORMAL"
+    echo -e "Available version:" "$GREEN" $bnumber "$NORMAL"
+    echo "Your server is up to date!"
+    return 0
+  fi
+}
+
+#
+# Check if the server need to be updated
+# Return 0 if update is needed, else return 1
+#
+function isUpdateNeeded(){
+  instver="$(getCurrentVersion)"
+  bnumber="$(getAvailableVersion)"
+  if [[ -z "$bnumber" || "$bnumber" -eq "$instver" ]]; then
+    return 1   # no update needed
+  elif checkUpdateManifests; then
+    echo "Build ID changed but manifests have not changed"
+    return 1
+  else
+    return 0   # update needed
+  fi
+}
+
+#
+# Parse an ACF structure
+# $1 is the desired path
+# $2 is the desired property
+# $3 is the current path
+#
+function parseSteamACF(){
+  local sname
+  while read name val; do
+    name="${name#\"}"
+    name="${name%\"}"
+    val="${val#\"}"
+    val="${val%\"}"
+    if [ "$name" = "}" ]; then
+      break
+    elif [ "$name" == "{" ]; then
+      parseSteamACF "$1" "$2" "${3}.${sname}"
+    else
+      if [ "$3" == "$1" -a "$name" == "$2" ]; then
+        echo "$val"
+        break
+      fi
+      sname="${name}"
+    fi
+  done
+}
+
+#
+# Return the current version number
+#
+function getCurrentVersion(){
+  if [ -f "${dnlserverroot}/steamapps/appmanifest_${appid}.acf" ]; then
+    while read name val; do if [ "${name}" == "{" ]; then parseSteamACF "" "buildid"; break; fi; done <"${dnlserverroot}/steamapps/appmanifest_${appid}.acf"
+  fi
+}
+
+#
+# Return the version from the staging directory
+#
+function getStagingVersion(){
+  if [ -f "${dnlStagingDir}/steamapps/appmanifest_${appid}.acf" ]; then
+    while read name val; do if [ "${name}" == "{" ]; then parseSteamACF "" "buildid"; break; fi; done <"${dnlStagingDir}/steamapps/appmanifest_${appid}.acf"
+  fi
+}
+
+#
+# Get the current available server version on steamdb
+#
+function getAvailableVersion(){
+  rm -f "$steamcmd_appinfocache"
+  runSteamCMD +app_info_update 1 +app_info_print "$appid" +quit | while read name val; do if [ "${name}" == "{" ]; then parseSteamACF ".depots.branches.public" "buildid"; break; fi; done
+}
+
+#
+# Gets the server map name
+#
+function getServerMapName(){
+  local mapname="${serverMap}"
+
+  # extract the map name from the active map mod
+  if [ -n "$serverMapModId" ]; then
+    mapname="$(perl -e '
+      my $data;
+      { local $/; $data = <>; }
+      my $mapnamelen = unpack("@0 L<", $data);
+      my $mapname = substr($data, 4, $mapnamelen - 1);
+      $mapnamelen += 4;
+      my $mapfilelen = unpack("@" . ($mapnamelen + 4) . " L<", $data);
+      my $mapfile = substr($data, $mapnamelen + 8, $mapfilelen - 1);
+      print $mapfile;
+    ' <"${dnlserverroot}/DNL/Content/Mods/${serverMapModId}/mod.info")"
+  fi
+
+  echo "${mapname##*/}"
+}
+
+#
+# Gets the server map filename
+#
+function getServerMapFilename(){
+  local mapname="$1"
+  local savedir="$2"
+
+  # Take into account screwed up casing of saved dnl files
+  # in some environments
+  local mapfile="$(find "${savedir}" -iname "${mapname}.dnl" | head -n1)"
+
+  if [ -z "$mapfile" ]; then
+    sleep 2
+    mapfile="$(find "${savedir}" -iname "${mapname}.dnl" | head -n1)"
+  fi
+
+  # If both attempts fail, server may have
+  # crashed between unlink and rename
+  if [ -z "$mapfile" ]; then
+    mapfile="$(find "${savedir}" -iname "${mapname}.tmp" | head -n1)"
+  fi
+
+  # If neither the dnl nor the tmp file exists, then the
+  # map name may be incorrect.  Try to get any dnl or tmp
+  # file in the saved dnls directory
+  if [ -z "$mapfile" ]; then
+    mapfile="$(find "${savedir}" -iname "*.dnl" | head -n1)"
+
+    if [ -z "$mapfile" ]; then
+      mapfile="$(find "${savedir}" -iname "*.tmp" | head -n1)"
+    fi
+  fi
+
+  echo "${mapfile}"
+}
+
+#
+# Gets the saved worlds directory
+#
+function getSavedDnLsDirectory(){
+  local savedir="SavedDnLs"
+  local saverootdir="$1"
+
+  # Get save directory name
+  if [ -n "${dnl_AltSaveDirectoryName}" ]; then
+    savedir="${dnl_AltSaveDirectoryName}"
+  fi
+
+  savedir="${saverootdir}/${savedir}"
+
+  # Check for the (unlikely) case that the case of the
+  # saved dnl directory is screwed up
+  if [ ! -d "${savedir}" ]; then
+    cisavedir="$(find "${dnlserverroot}" -ipath "${savedir}" | head -n1)"
+
+    if [ -n "$cisavedir" ]; then
+      echo -e "  ${NORMAL}[  ${YELLOW}WARN${NORMAL}  ] Saved dnls directory capitalization is inconsistent" >&2
+      savedir="${cisavedir}"
+    else
+      echo -e "  ${NORMAL}[ ${RED}ERROR${NORMAL}  ] Saved dnls directory does not exist" >&2
+      echo ""
+      return 1
+    fi
+  fi
+
+  echo "${savedir}"
+}
+
+#
+# Check if the update manifest matches the current manifest
+#
+function checkUpdateManifests(){
+  appinfo="$(runSteamCMD +app_info_print "$appid" +quit)"
+  while read depot manifest <&3; do
+    newmanifest="$(echo "${appinfo}" | while read name val; do if [ "${name}" == "{" ]; then parseSteamACF ".depots.${depot}.manifests" "public"; break; fi; done)"
+    if [ "${newmanifest}" != "${manifest}" ]; then
+      return 1
+    fi
+  done 3< <(sed -n '/^[{]$/,/^[}]$/{/^\t"MountedDepots"$/,/^\t[}]$/{/^\t\t/p}}' "${dnlserverroot}/steamapps/appmanifest_${appid}.acf")
+  return 0
+}
+
+#
+# Get the PID of the server process
+#
+function getServerPID(){
+  if [ -f "${dnlserverroot}/${dnlserverpidfile}" ]; then
+    serverpid="$(<"${dnlserverroot}/${dnlserverpidfile}")"
+    if kill -0 "$serverpid" >/dev/null 2>&1; then
+      echo $serverpid
+      return
+    fi
+  fi
+  if [ -f "${dnlserverroot}/${dnlserveroldpidfile}" ]; then
+    serverpid="$(<"${dnlserverroot}/${dnlserveroldpidfile}")"
+    if kill -0 "$serverpid" >/dev/null 2>&1; then
+      echo $serverpid
+      return
+    fi
+  fi
+}
+
+#
+# Check id the server process is alive
+#
+function isTheServerRunning(){
+  if [ -n "`getServerPID`" ]; then
+    return 0
+  else
+    return 1
+  fi
+}
+
+#
+# Check if the server is up
+#
+#
+function isTheServerUp(){
+  result=1
+  if [ ! -x "$lsof" ]; then
+    "$lsof" -i "${dnl_MultiHome:+udp@}${dnl_MultiHome}:$(getGamePort)" > /dev/null
+    result=$?
+  fi
+  if [ $result -ne 0 ]; then
+    perl -MSocket -MFcntl -e '
+      my $port = int($ARGV[0]);
+      socket(my $socket, PF_INET, SOCK_DGRAM, 0);
+      setsockopt($socket, SOL_SOCKET, SO_RCVTIMEO, pack("i4", 1, 0, 0, 0));
+      my $sockaddr = pack_sockaddr_in($port, inet_aton($ARGV[1]));
+      send($socket, "\xff\xff\xff\xffTSource Engine Query\x00", 0, $sockaddr);
+      my $flags = fcntl($socket, F_GETFL, 0) or exit(1);
+      fcntl($socket, F_SETFL, $flags | O_NONBLOCK) or exit(1);
+      my $data = "";
+      my $rin = "";
+      vec($rin, fileno($socket), 1) = 1;
+      if (select($rin, undef, undef, 0.25) >= 0) {
+        recv($socket, $data, 1400, 0) or exit(1);
+        my ($servername, $mapname, $game, $fullname, $rest) = split(/\x00/, substr($data, 6), 5);
+        my $maxplayers = ord(substr($rest, 3, 1));
+        if ($maxplayers == 0) { exit(1); }
+        exit(0);
+      } else {
+        exit(1);
+      }
+      ' "$(getQueryPort)" "${dnl_MultiHome:-127.0.0.1}"
+    result=$?
+  fi
+  # In this case, the result is:
+  # 1 if the command fail. The port is not listenning
+  # 0 if the command succeed. The port is listenning
+  if [ $result -eq 0 ];then
+    return 1
+  else
+    return 0
+  fi
+}
+
+#
+# Check if the server is visible in the steam server list
+#
+function isTheServerOnline(){
+  if [ -n "$dnl_MultiHome" ]; then
+    publicip="$(curl --interface "${dnl_MultiHome}" -s http://api.ipify.org/)"
+  else
+    publicip="$(curl -s http://api.ipify.org/)"
+  fi
+  local serverresp
+
+  if [[ "$publicip" =~ [1-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]* ]]; then
+    serverresp="$(curl -s "http://api.steampowered.com/ISteamApps/GetServersAtAddress/v0001?addr=${publicip}:$(getQueryPort)")"
+  fi
+
+  # If the Steam server response contains "addr": "$ip:$port",
+  # then the server has registered with the Steam master server
+  if [[ "$serverresp" =~ "\"addr\": \""([^\"]*):([0-9]*)"\"" ]]; then
+    return 0
+  else
+    return 1
+  fi
+}
+
+#
+# Check if anybody is connected to the server
+#
+function numPlayersConnected(){
+  if [ -n "$dnlUsePlayerList" ]; then
+    perl -MSocket -e '
+      my $port = int($ARGV[0]);
+      socket(my $socket, PF_INET, SOCK_DGRAM, 0);
+      setsockopt($socket, SOL_SOCKET, SO_RCVTIMEO, pack("i4", 1, 0, 0, 0));
+      my $sockaddr = pack_sockaddr_in($port, inet_aton($ARGV[1]));
+      send($socket, "\xff\xff\xff\xff\x55\xff\xff\xff\xff", 0, $sockaddr);
+      my $data = "";
+      recv($socket, $data, 1400, 0) or (print "-1" and exit(1));
+      if (ord(substr($data, 4, 1)) == 0x41) {
+        my $chal = substr($data, 5);
+        send($socket, "\xff\xff\xff\xff\x55" . $chal, 0, $sockaddr);
+        $data = "";
+        recv($socket, $data, 1400, 0) or (print "-1" and exit(1));
+      }
+      ord(substr($data, 4, 1)) != 0x44 and (print "-1" and exit(1));
+      my $players = ord(substr($data, 5, 1));
+      my $active = 0;
+      my $pdata = substr($data, 6);
+      for my $i (0 .. $players) {
+        my $idx = ord(substr($pdata, 0, 1));
+        my ($name, $rest) = split(/\x00/, substr($pdata, 1), 2);
+        $pdata = substr($rest, 8);
+        if ($name ne "") {
+          $active = $active + 1;
+        }
+      }
+      print "$active\n";
+      ' "$(getQueryPort)" "${dnl_MultiHome:-127.0.0.1}"
+  else
+    perl -MSocket -e '
+      my $port = int($ARGV[0]);
+      socket(my $socket, PF_INET, SOCK_DGRAM, 0);
+      setsockopt($socket, SOL_SOCKET, SO_RCVTIMEO, pack("i4", 1, 0, 0, 0));
+      my $sockaddr = pack_sockaddr_in($port, inet_aton($ARGV[1]));
+      send($socket, "\xff\xff\xff\xffTSource Engine Query\x00", 0, $sockaddr);
+      my $data = "";
+      recv($socket, $data, 1400, 0) or (print "-1" and exit(1));
+      my ($servername, $mapname, $game, $fullname, $rest) = split(/\x00/, substr($data, 6), 5);
+      my $players = ord(substr($rest, 2, 1));
+      print "$players\n";
+      ' "$(getQueryPort)" "${dnl_MultiHome:-127.0.0.1}"
+  fi
+}
+
+#
+# run function
+#
+doRun() {
+  cd "${dnlserverroot}/${dnlserverexec%/*}"
+
+  if isTheServerRunning; then
+    echo "Error: another server instance is running from the same directory"
+    echo "Aborting - two servers MUST NOT run from the same directory"
+    exit 1
+  fi
+  
+  # $$ returns the main process, $BASHPID returns the current process
+  echo "$BASHPID" >"${dnlserverroot}/${dnlmanagerpidfile}"
+
+  if [ -f "${dnlserverroot}/${dnlupdatelockfile}" ]; then
+    local updatepid="$(<"${dnlserverroot}/${dnlupdatelockfile}")"
+    if kill -0 "$updatepid" >/dev/null 2>&1; then
+      echo "An update is currently in progress.  Start aborted"
+      return 1
+    fi
+  fi
+
+  if [ " $* " = *" --wait "* ]; then
+    # This requires bash 4+
+    # $$ returns the main process, $BASHPID returns the current process
+    kill -STOP $BASHPID # wait for caller to renice us
+  fi
+
+  dnlserveropts="$serverMap"
+
+  while read varname; do
+    val="${!varname}"
+    modid="${varname#dnlmod_}"
+    case "$val" in
+      game*|enabled)
+        dnl_GameModIds="${dnl_GameModIds}${dnl_GameModIds:+,}${modid}"
+        ;;
+      map*)
+        serverMapModId="${modid}"
+        ;;
+      tc|total*)
+        dnl_TotalConversionMod="${modid}"
+        ;;
+    esac
+  done < <(sed -n 's/^\(dnlmod_[^= ]*\)=.*/\1/p' <"$configfile")
+
+  if [ -n "$serverMapModId" ]; then
+    serverMap="$(perl -e '
+      my $data;
+      { local $/; $data = <>; }
+      my $mapnamelen = unpack("@0 L<", $data);
+      my $mapname = substr($data, 4, $mapnamelen - 1);
+      $mapnamelen += 4;
+      my $mapfilelen = unpack("@" . ($mapnamelen + 4) . " L<", $data);
+      my $mapfile = substr($data, $mapnamelen + 8, $mapfilelen - 1);
+      print $mapfile;
+    ' <"${dnlserverroot}/DNL/Content/Mods/${serverMapModId}/mod.info")"
+    dnlserveropts="${serverMap}?MapModID=${serverMapModId}"
+  fi
+
+  if [ -z "$dnlserveropts" ]; then
+    dnlserveropts="TheIsland"
+  fi
+
+  dnlextraopts=( )
+
+  while read varname; do
+    val="${!varname}"
+    case "$varname" in
+      dnl_*)
+        name="${varname#dnl_}"
+
+        # Port is actually one higher than specified
+        # i.e. specifying port 7777 will have the server
+        # use port 7778
+        if [ "$name" == "Port" ]; then
+          (( val = val - 1 ))
+        fi
+
+        if [ -n "$val" ]; then
+          dnlserveropts="${dnlserveropts}?${name}=${val}"
+        else
+          dnlserveropts="${dnlserveropts}?${name}"
+        fi
+      ;;
+      dnlopt_*)
+        name="${varname#dnlopt_}"
+        val="${!varname}"
+
+        if [ -n "$val" ]; then
+          dnlextraopts=( "${dnlextraopts[@]}" "-${name}=${val}" )
+        fi
+      ;;
+      dnlflag_*)
+        name="${varname#dnlflag_}"
+
+        dnlextraopts=( "${dnlextraopts[@]}" "-${name}" )
+      ;;
+    esac
+    unset $varname
+  done < <(sed -n 's/^\(dnl\(\|opt\|flag\)_[^= ]*\)=.*/\1/p' <"$configfile")
+
+  # bring in dnl_... options
+  for varname in "${!dnl_@}"; do
+    name="${varname#dnl_}"
+    val="${!varname}"
+
+    # Port is actually one higher than specified
+    # i.e. specifying port 7777 will have the server
+    # use port 7778
+    if [ "$name" == "Port" ]; then
+      (( val = val - 1 ))
+    fi
+
+    if [ -n "$val" ]; then
+      dnlserveropts="${dnlserveropts}?${name}=${val}"
+    else
+      dnlserveropts="${dnlserveropts}?${name}"
+    fi
+  done
+
+  # bring in dnlflag_... flags
+  for varname in "${!dnlflag_@}"; do
+    name="${varname#dnlflag_}"
+
+    dnlextraopts=( "${dnlextraopts[@]}" "-${name}" )
+  done
+
+  # bring in dnlopt_... options
+  for varname in "${!dnlopt_@}"; do
+    name="${varname#dnlopt_}"
+    val="${!varname}"
+
+    if [ -n "$val" ]; then
+      dnlextraopts=( "${dnlextraopts[@]}" "-${name}=${val}" )
+    fi
+  done
+
+  if [[ " ${dnlextraopts[*]} " =~ " -automanagedmods " ]]; then
+    steamcmdroot="${dnlserverroot}/Engine/Binaries/ThirdParty/SteamCMD/Linux"
+    steamcmdexec="steamcmd.sh"
+    doDownloadSteamCMD
+  fi
+
+  dnlserveropts="${dnlserveropts}?listen"
+  # run the server in background
+  echo "`timestamp`: start"
+
+  serverpid=0
+  restartserver=1
+
+  # Shutdown the server when we are terminated
+  shutdown_server(){
+    restartserver=0
+    rm -f "$dnlserverroot/$dnlautorestartfile"
+    if [ "$serverpid" -ne 0 ]; then
+      kill -INT $serverpid >/dev/null 2>&1
+    fi
+    exit 0
+  }
+
+  trap shutdown_server INT TERM
+
+  # Auto-restart loop
+  while [ $restartserver -ne 0 ]; do
+    echo -n "`timestamp`: Running"
+    printf " %q" "$dnlserverroot/$dnlserverexec" "$dnlserveropts" "${dnlextraopts[@]}"
+    echo
+    # Put the server process into the background so we can monitor it
+    "$dnlserverroot/$dnlserverexec" "$dnlserveropts" "${dnlextraopts[@]}" &
+    # Grab the server PID
+    serverpid=$!
+    echo "$serverpid" >"${dnlserverroot}/${dnlserverpidfile}"
+    echo "`timestamp`: Server PID: $serverpid"
+    # Disable auto-restart so we don't get caught in a restart loop
+    rm -f "$dnlserverroot/$dnlautorestartfile"
+    restartserver=0
+    if [ -n "$dnlAlwaysRestartOnCrash" ]; then
+      restartserver=1
+      touch "$dnlserverroot/$dnlautorestartfile"
+    fi
+    # Retries for checking it the server comes back up after going down
+    serverdowntries=0
+
+    sleep 5
+
+    while true; do
+      # Grab the current server PID
+      local pid="`getServerPID`"
+      if [ "$pid" == "$serverpid" ]; then
+        serverdowntries=0
+        if [ "$restartserver" -eq 0 ]; then
+          # Check if the server has fully started
+          if ! isTheServerUp; then
+            # Enable auto-restart if the server is up
+            echo "`timestamp`: server is up"
+            touch "$dnlserverroot/$dnlautorestartfile"
+            restartserver=1
+          fi
+        elif isTheServerUp; then
+          (( serverdowntries++ ))
+
+          if (( serverdowntries > 12 )); then
+            # Server has not been listening for 60 seconds, so restart it.
+            echo "`timestamp`: The server has stopped listening"
+            echo "`timestamp`: Restarting server"
+            for (( i = 0; i < 5; i++ )); do
+              if ! kill -0 "$serverpid"; then
+                break
+              fi
+              kill -INT "$serverpid"
+              sleep 5
+            done
+            if kill -0 "$serverpid"; then
+              echo "`timestamp`: Graceful restart failed - killing server"
+              kill -KILL "$serverpid"
+            fi
+
+            # Exit the server check loop
+            break
+          fi
+        fi
+      else
+        echo "`timestamp`: Bad PID '$pid'; expected '$serverpid'"
+        if [ "$pid" != "" ]; then
+          # Another instance must be running - disable autorestart
+          restartserver=0
+        fi
+        break
+      fi
+      sleep 5
+    done
+
+    # Wait on the now-dead process to reap it and get its return status
+    wait $serverpid
+    echo "`timestamp`: exited with status $?"
+
+    # doStop will remove the autorestart file
+    if [ ! -f "$dnlserverroot/$dnlautorestartfile" ]; then
+      restartserver=0
+
+    fi
+
+    if [ "$restartserver" -ne 0 ]; then
+      echo "`timestamp`: restarting server"
+    fi
+  done
+}
+
+doRunBG(){
+  for fd in $(ls /proc/$BASHPID/fd/); do
+    [[ $fd -gt 2 && $fd != 255 ]] && exec {fd}<&-
+  done
+
+  doRun "$@" > >(while read -r l; do printf "%s: [%s] %s\n" "$(timestamp)" "${instance}" "${l}"; done) 2>&1
+}
+
+#
+# start function
+#
+doStart() {
+  touch "${dnlserverroot}/.startAfterUpdate-${instance}"
+
+  if [ -f "${dnlserverroot}/${dnlupdatelockfile}" ]; then
+    local updatepid="$(<"${dnlserverroot}/${dnlupdatelockfile}")"
+    if kill -0 "$updatepid" >/dev/null 2>&1; then
+      logprint "Start aborted due to running update - pid: $updatepid"
+      return 1
+    fi
+  fi
+
+  serverpid="$(getServerPID)"
+  if [ -n "$serverpid" ] && kill -0 "$serverpid"; then
+    logprint "Start aborted due to server already running - pid: $serverpid"
+  else
+    if [ "$dnlAutoUpdateOnStart" == "true" ]; then
+      if ! [[ " $* " =~ " --noautoupdate " ]]; then
+        logprint "Checking for updates before starting"
+        doUpdate --update-mods --no-autostart
+      fi
+    fi
+
+    if [[ " $* " =~ " --alwaysrestart " ]]; then
+      dnlAlwaysRestartOnCrash=true
+    fi
+    
+    nobackground=
+    if [[ " $* " =~ " --no-background " ]]; then
+      nobackground=1
+    fi
+    
+    tput sc
+    logprint "The server is starting..."
+
+    local pid=$!
+    if [[ -n "$nobackground" ]]; then
+      echo
+      doRun "$@"
+      return
+    elif [[ -n "$dnlPriorityBoost" || -n "$dnlCpuAffinity" ]]; then
+      doRunBG --wait </dev/null >>"$logdir/$dnlserverLog" 2>&1 & # output of this command is logged
+      local pid="$!"
+
+      # Wait for monitor process to suspend itself
+      sleep 1
+
+      if [ -n "$dnlPriorityBoost" ]; then
+        logprint "Boosting priority of dnl server"
+        sudo renice -n "$dnlPriorityBoost" "$pid"
+      fi
+
+      if [ -n "$dnlCpuAffinity" ]; then
+        echo "Setting CPU affinity for dnl server"
+        taskset -pc "$dnlCpuAffinity" "$pid"
+      fi
+
+      kill -CONT "$pid"
+    else
+      doRunBG </dev/null >>"$logdir/$dnlserverLog" 2>&1 & # output of this command is logged
+    fi
+    tput rc; tput ed;
+    logprint "The server is now running, and should be up within 10 minutes"
+  fi
+}
+
+#
+# starts all servers specified by configfile_xxxxx in config file
+#
+doStartAll(){
+  doStart
+  for cfg in "${!configfile_@}"; do
+    if [ -f "${!cfg}" ]; then
+      (
+        source "${!cfg}"
+        doStart
+      )
+    fi
+  done
+}
+
+#
+# stop the DnL server
+#
+doStop() {
+  if [ "$1" != "update" ]; then
+    rm -f "${dnlserverroot}/.startAfterUpdate-${instance}"
+  fi
+
+  if isTheServerRunning; then
+    local stopreason="$1"
+    local dowarn=
+    local warnreason=
+    local dosave=
+    shift
+
+    for arg in "$@"; do
+      case "$arg" in
+        --warn) dowarn=1; ;;
+        --warnreason=*) warnreason="${arg#--warnreason=}"; dowarn=1; ;;
+        --saveworld) dosave=1; ;;
+      esac
+    done
+
+    if [[ -n "$dowarn" ]]; then
+      if ! doWarn "$stopreason" "$warnreason"; then
+        return 1
+      fi
+    fi
+    if [[ -n "$dosave" ]]; then
+      doSaveWorld
+    fi
+    tput sc
+    logprint "Stopping server; reason: $stopreason"
+    rm -f "$dnlserverroot/$dnlautorestartfile"
+    rm -f "$dnlserverroot/$dnloldautorestartfile"
+    # kill the server with the PID
+    PID=`getServerPID`
+    kill -INT $PID >/dev/null 2>&1
+
+    for (( i = 0; i < 20; i++ )); do
+      sleep 1
+      if ! isTheServerRunning; then
+        break
+      fi
+    done
+
+    if isTheServerRunning; then
+      tput rc
+      logprint "Killing server"
+      kill -KILL $PID >/dev/null 2>&1
+    fi
+
+    if [ -f "${dnlserverroot}/${dnlmanagerpidfile}" ]; then
+      PID="$(<"${dnlserverroot}/${dnlmanagerpidfile}")"
+      if [ -n "$PID" ]; then
+        kill $PID >/dev/null 2>&1
+      fi
+    fi
+
+    rm -f "${dnlserverroot}/${dnlserverpidfile}"
+    rm -f "${dnlserverroot}/${dnlserveroldpidfile}"
+    rm -f "${dnlserverroot}/${dnlmanagerpidfile}"
+
+    tput rc; tput ed;
+    logprint "The server has been stopped"
+  else
+    echo "The server is already stopped"
+  fi
+}
+
+#
+# stops all servers specified by configfile_xxxxx in config file
+#
+doStopAll(){
+  doStop
+  for cfg in "${!configfile_@}"; do
+    if [ -f "${!cfg}" ]; then
+      (
+        source "${!cfg}"
+        doStop
+      )
+    fi
+  done
+}
+
+#
+# install / update / download update
+#
+runSteamCMDAppUpdate(){
+  runSteamCMDspinner +force_install_dir "$1" +app_update $appid $2
+}
+
+#
+# install of DnL server
+#
+doInstall() {
+  # Check if dnlserverroot already exists
+  if [ ! -d "$dnlserverroot" ]; then
+    # If it does not exist, try create it
+    echo -e "Creating the DnL server root directory ($dnlserverroot)"
+    mkdir -p "$dnlserverroot"
+    if [ ! $? ] ; then
+      echo -e "[" "$RED" "ERROR" "$NORMAL" "]" "\tFailed to create the defined DnL server root directory ($dnlserverroot)"
+      exit 1
+    fi
+  fi
+
+  cd "$steamcmdroot"
+  echo -n "Installing DnL server"
+  # install the server
+  doDownloadSteamCMD
+  runSteamCMDAppUpdate "$dnlserverroot" validate
+  if [ $? -eq 5 ]; then
+    echo "User ${steamlogin:-anonymous} login failed - please login to steamcmd manually"
+  fi
+  # the current version should be the last version. We set our version
+  instver="$(getCurrentVersion)"
+}
+
+
+#
+# Cancels a pending shutdown
+#
+doCancelShutdown(){
+  if [ -f "${dnlserverroot}/${dnlwarnlockfile}" ]; then
+    local lockpid="$(<"${dnlserverroot}/${dnlwarnlockfile}")"
+    if [ -n "$lockpid" ]; then
+      kill "$lockpid"
+      rm -f "${dnlserverroot}/${dnlwarnlockfile}"
+    fi
+  fi
+}
+
+#
+# Formats a warning message based on replacement strings
+#
+printWarnMessage(){
+  local msg
+  if [ -n "$msgWarnReason" ]; then
+    local reason
+    local msgtime
+    if [ "$3" == "minutes" ]; then
+      if [ -n "$msgTimeMinutes" ]; then
+        msgtime="${msgTimeMinutes//\{minutes\}/$4}"
+      else
+        msgtime="$4 minutes"
+      fi
+    else
+      if [ -n "$msgTimeSeconds" ]; then
+        msgtime="${msgTimeSeconds//\{seconds\}/$4}"
+      else
+        msgtime="$4 seconds"
+      fi
+    fi
+    msg="${msgWarnReason//\{time\}/$msgtime}"
+    if [ -n "$warnreason" ]; then
+      local v="warnreason_$warnreason"
+      reason="${!v}"
+      if [ -z "$reason" ]; then
+        reason="$warnreason"
+      fi
+    elif [ "$1" == "update" ]; then
+      if [ -n "$appupdate" ]; then
+        if [ -n "$modupdate" ]; then
+          if [ -n "$msgReasonUpdateAppMod" ]; then
+            reason="$msgReasonUpdateMod"
+          else
+            reason="an update to the game and an update to mod(s) {modnamesupdated}"
+          fi
+        else
+          if [ -n "$msgReasonUpdateApp" ]; then
+            reason="$msgReasonUpdateApp"
+          else
+            reason="an update to the game"
+          fi
+        fi
+      elif [ -n "$modupdate" ]; then
+        if [ -n "$msgReasonUpdateMod" ]; then
+          reason="$msgReasonUpdateMod"
+        else
+          reason="an update to mod(s) {modnamesupdated}"
+        fi
+      fi
+    elif [ -n "$shutdownreason" ]; then
+      reason="$shutdownreason"
+    elif [ "$1" == "restart" ]; then
+      if [ -n "$msgReasonRestart" ]; then
+        reason="$msgReasonRestart"
+      else
+        reason="a restart"
+      fi
+    else
+      if [ -n "$msgReasonShutdown" ]; then
+        reason="$msgReasonShutdown"
+      else
+        reason="maintenance"
+      fi
+    fi
+    reason="${reason//\{time\}/${msgtime}}"
+    reason="${reason//\{modnamesupdated\}/${modnamesupdated}}"
+    reason="${reason//\{version\}/${dnlversion}}"
+    msg="${msg//\{reason\}/${reason}}"
+  else
+    if [ "$1" == "update" ]; then
+      if [ "$3" == "minutes" ]; then
+        if [ -n "$msgWarnUpdateMinutes" ]; then
+          msg="${msgWarnUpdateMinutes//%d/$4}"
+        else
+          msg="This DnL server will shutdown for an update in $4 minutes"
+        fi
+      else
+        if [ -n "$msgWarnUpdateSeconds" ]; then
+          msg="${msgWarnUpdateSeconds//%d/$4}"
+        else
+          msg="This DnL server will shutdown for an update in $4 seconds"
+        fi
+      fi
+    elif [ "$1" == "restart" ]; then
+      if [ "$3" == "minutes" ]; then
+        if [ -n "$msgWarnRestartMinutes" ]; then
+          msg="${msgWarnRestartMinutes//%d/$4}"
+        else
+          msg="This DnL server will shutdown for a restart in $4 minutes"
+        fi
+      else
+        if [ -n "$msgWarnRestartSeconds" ]; then
+          msg="${msgWarnRestartSeconds//%d/$4}"
+        else
+          msg="This DnL server will shutdown for a restart in $4 seconds"
+        fi
+      fi
+    else
+      if [ "$3" == "minutes" ]; then
+        if [ -n "$msgWarnShutdownMinutes" ]; then
+          msg="${msgWarnShutdownMinutes//%d/$4}"
+        else
+          msg="This DnL server will shutdown in $4 minutes"
+        fi
+      else
+        if [ -n "$msgWarnShutdownSeconds" ]; then
+          msg="${msgWarnShutdownSeconds//%d/$4}"
+        else
+          msg="This DnL server will shutdown in $4 seconds"
+        fi
+      fi
+    fi
+  fi
+
+  doBroadcastWithEcho "$msg"
+}
+
+#
+# Checks if a player has requested an update cancel in the last 5 minutes
+#
+isUpdateCancelRequested(){
+  if [ -n "$chatCommandRestartCancel" ]; then
+    local canceltime="$(
+      find "${dnlserverroot}/DNL/Saved/Logs" -name 'ServerGame.*.log' -mmin -5 -print0 | 
+        xargs -0 grep -F -e "${chatCommandRestartCancel}" | 
+        sed 's@^[[]\(....\)\.\(..\)\.\(..\)-\(..\)\.\(..\)\.\(..\):.*@\1-\2-\3 \4:\5:\6 UTC@' | 
+        head -n1)"
+    if [ -n canceltime ]; then
+      canceltime="$(date +%s --date="${canceltime}")"
+      local timenow="$(date +%s --date="now - 5 minutes")"
+      if (( canceltime > timenow )); then
+        return 0
+      fi
+    fi
+  fi
+
+  return 1
+}
+
+#
+# Waits for a configurable number of minutes before updating the server
+#
+doWarn(){
+  cd "$dnlserverroot"
+
+  (
+    echo "${BASHPID}" >"${dnlserverroot}/${dnlwarnlockfile}.${BASHPID}" 2>/dev/null
+    while true; do
+      if ! ln "${dnlserverroot}/${dnlwarnlockfile}.${BASHPID}" "${dnlserverroot}/${dnlwarnlockfile}" 2>/dev/null; then
+        local lockpid="$(<"${dnlserverroot}/${dnlwarnlockfile}")"
+        if [ -n "$lockpid" ] && [ "$lockpid" != "${BASHPID}" ] && kill -0 "$lockpid" 2>/dev/null; then
+          echo "Shutdown warning already in progress (PID: $lockpid)"
+          rm -f "${dnlserverroot}/${dnlwarnlockfile}.${BASHPID}" 2>/dev/null
+          exit 1
+        fi
+        rm -f "${dnlserverroot}/${dnlwarnlockfile}"
+      else
+        break
+      fi
+    done
+    rm -f "${dnlserverroot}/${dnlwarnlockfile}.${BASHPID}"
+
+    update_cancelled(){
+      if [ -n "$msgUpdateCancelled" ]; then
+        msg="${msgUpdateCancelled//%s/$1}"
+      else
+        msg="Shutdown cancelled by operator ($1)"
+      fi
+      doBroadcastWithEcho "${msg}"
+      exit 1
+    }
+
+    trap "update_cancelled 'Ctrl+C'" SIGINT
+    trap "update_cancelled 'Terminated'" SIGTERM
+    trap "update_cancelled 'Connection Closed'" SIGHUP
+    trap "update_cancelled 'Quit'" SIGQUIT
+
+    local pid=`getServerPID`
+    local sleeppid
+    if [ -n "$pid" ]; then
+      local warnmsg
+      local warnminutes=$(( dnlwarnminutes ))
+      if (( warnminutes == 0 )); then
+        warnminutes=60
+      fi
+
+      local warnintervals=( 90 60 45 30 20 15 10 5 4 3 2 )
+
+      if (( warnminutes > 2 )); then
+        for warninterval in "${warnintervals[@]}"; do
+          if [ "`getServerPID`" != "$pid" ]; then
+            echo "Server has stopped.  Aborting $1"
+            rm -f "${dnlserverroot}/${dnlwarnlockfile}"
+            return 1
+          fi
+          if (( warnminutes > warninterval )); then
+            sleep 1m &
+            sleeppid=$!
+            printWarnMessage "$1" "$2" "minutes" "$warnminutes"
+            for (( min = warnminutes - 1; min >= warninterval; min-- )); do
+              numplayers=$(numPlayersConnected)
+              echo "There are ${numplayers} players connected"
+              if [[ "numplayers" == "-1" ]]; then
+                echo "Server is not running.  Shutting down immediately"
+                return 0
+              elif (( (numplayers + 0) == 0 )); then
+                doBroadcastWithEcho "Nobody is connected.  Shutting down immediately"
+                rm -f "${dnlserverroot}/${dnlwarnlockfile}"
+                return 0
+              fi
+              if isUpdateCancelRequested; then
+                doBroadcastWithEcho "Restart cancelled by player request"
+                return 1
+              fi
+              wait $sleeppid
+              if (( $min > $warninterval )); then
+                sleep 1m &
+                sleeppid=$!
+              fi
+            done
+            warnminutes=$warninterval
+          fi
+        done
+      fi
+
+      local warnseconds=120
+      warnintervals=( 90 60 45 30 20 15 10 5 0 )
+      if (( warnminutes == 1 )); then
+        warnseconds = 60
+        warnintervals=( 45 30 20 15 10 5 0 )
+      fi
+      for warninterval in "${warnintervals[@]}"; do
+        sleep $(( warnseconds - warninterval ))s &
+        sleeppid=$!
+        if [ "`getServerPID`" != "$pid" ]; then
+          echo "Server has stopped.  Aborting update"
+          rm -f "${dnlserverroot}/${dnlwarnlockfile}"
+          return 1
+        fi
+        printWarnMessage "$1" "$2" "seconds" "$warnseconds"
+        if (( warnseconds >= 20 )); then
+          numplayers=$(numPlayersConnected)
+          echo "There are ${numplayers} players connected"
+          if [[ "numplayers" == "-1" ]]; then
+            echo "Server is not running.  Shutting down immediately"
+            return 0
+          elif (( (numplayers + 0) == 0 )); then
+            doBroadcastWithEcho "Nobody is connected.  Shutting down immediately"
+            rm -f "${dnlserverroot}/${dnlwarnlockfile}"
+            return 0
+          fi
+          if isUpdateCancelRequested; then
+            doBroadcastWithEcho "Restart cancelled by player request"
+            return 1
+          fi
+        fi
+        wait $sleeppid
+        warnseconds=$warninterval
+      done
+    fi
+
+    rm -f "${dnlserverroot}/${dnlwarnlockfile}"
+
+    if [ "`getServerPID`" != "$pid" ]; then
+      echo "Server has stopped.  Aborting $1"
+      return 1
+    fi
+
+    return 0
+  )
+
+  return $?
+}
+
+#
+# Stop the server, update it and then start it back.
+#
+doUpdate() {
+  local appupdate=
+  local bgupdate=
+  local updatetype=normal
+  local validate=
+  local modupdate=
+  local saveworld=
+  local downloadonly=
+  local nodownload=
+  local noautostart=
+  local use_systemd=
+  local use_service=
+  local use_upstart=
+  local force=
+
+  for arg in "$@"; do
+    case "$arg" in
+      --force) appupdate=1; force=1; ;;
+      --safe) updatetype=safe; ;;
+      --warn) updatetype=warn; ;;
+      --ifempty) updatetype=ifempty; ;;
+      --warnreason=*) warnreason="${arg#--warnreason=}"; updatetype=warn; ;;
+      --validate) validate=validate; appupdate=1; force=1; ;;
+      --saveworld) saveworld=1; ;;
+      --update-mods) modupdate=1; ;;
+      --backup) dnlBackupPreUpdate=true; ;;
+      --no-autostart) noautostart=1; ;;
+      --stagingdir=*) dnlStagingDir="${arg#--stagingdir=}"; ;;
+      --downloadonly) downloadonly=1; ;;
+      --no-download) nodownload=1; ;;
+      --systemd) use_systemd=1; ;;
+      --service) use_service=1; ;;
+      --upstart) use_upstart=1; ;;
+      *)
+        echo "Unrecognized option $arg"
+        echo "Try 'dnlmanager -h' or 'dnlmanager --help' for more information."
+        exit 1
+    esac
+  done
+
+  # check if the server was alive before the update so we can launch it back after the update
+  serverWasAlive=0
+  if isTheServerRunning ;then
+    serverWasAlive=1
+  fi
+
+  echo "${BASHPID}" >"${dnlserverroot}/${dnlupdatelockfile}.${BASHPID}" 2>/dev/null
+  while true; do
+    if ! ln "${dnlserverroot}/${dnlupdatelockfile}.${BASHPID}" "${dnlserverroot}/${dnlupdatelockfile}" 2>/dev/null; then
+      local lockpid="$(<"${dnlserverroot}/${dnlupdatelockfile}")"
+      if [ -n "$lockpid" ] && [ "$lockpid" != "${BASHPID}" ] && kill -0 "$lockpid" 2>/dev/null; then
+        logprint "Update already in progress (PID: $lockpid)"
+        rm -f "${dnlserverroot}/${dnlupdatelockfile}.${BASHPID}" 2>/dev/null
+        return 1
+      fi
+      rm -f "${dnlserverroot}/${dnlupdatelockfile}"
+    else
+      break
+    fi
+  done
+  rm -f "${dnlserverroot}/${dnlupdatelockfile}.${BASHPID}"
+
+  logprint "Checking for update; PID: ${BASHPID}"
+
+  if [ -n "$modupdate" ]; then
+    if [ -z "$nodownload" ]; then
+      if ! doDownloadAllMods; then
+        modupdate=
+      fi
+    fi
+    if ! isAnyModUpdateNeeded; then
+      modupdate=
+    fi
+  fi
+
+  cd "$dnlserverroot"
+
+  if [ -n "$appupdate" ] || isUpdateNeeded; then
+    appupdate=1
+
+    if [ -n "${dnlStagingDir}" -a "${dnlStagingDir}" != "${dnlserverroot}" ]; then
+      if [ ! -d "$dnlStagingDir/DNL" ]; then
+        logprint "Copying to staging directory"
+        mkdir -p "$dnlStagingDir"
+        if [ "$(stat -c "%d" "$dnlserverroot")" == "$(stat -c "%d" "$dnlStagingDir")" ]; then
+          if [ -n "$useRefLinks" ]; then
+            cp -a --reflink=always "$dnlserverroot/DNL/." "$dnlStagingDir/DNL"
+            cp -a --reflink=always "$dnlserverroot/Engine/." "$dnlStagingDir/Engine"
+            cp -a --reflink=always "$dnlserverroot/linux64/." "$dnlStagingDir/linux64"
+            cp -a --reflink=always "$dnlserverroot/DNL/Content/Mods/111111111/." "$dnlStagingDir/DNL/Content/Mods/111111111"
+            cp --reflink=always "$dnlserverroot/DNL/Content/Mods/111111111.mod" "$dnlStagingDir/DNL/Content/Mods/111111111.mod"
+            cp --reflink=always "$dnlserverroot/"* "$dnlStagingDir" >/dev/null 2>&1
+            cp -a --reflink=always "$dnlserverroot/steamapps/." "$dnlStagingDir/steamapps"
+          else
+            cp -al "$dnlserverroot/DNL/." "$dnlStagingDir/DNL"
+            cp -al "$dnlserverroot/Engine/." "$dnlStagingDir/Engine"
+            cp -al "$dnlserverroot/linux64/." "$dnlStagingDir/linux64"
+            cp -al "$dnlserverroot/DNL/Content/Mods/111111111/." "$dnlStagingDir/DNL/Content/Mods/111111111"
+            cp -l "$dnlserverroot/DNL/Content/Mods/111111111.mod" "$dnlStagingDir/DNL/Content/Mods/111111111.mod"
+            cp -l "$dnlserverroot/"* "$dnlStagingDir" >/dev/null 2>&1
+            cp -a "$dnlserverroot/steamapps/." "$dnlStagingDir/steamapps"
+          fi
+        else
+          rsync -a "$dnlserverroot/." "$dnlStagingDir/."
+        fi
+        rm -rf "$dnlStagingDir/DNL/Content/Mods/"*
+        rm -rf "$dnlStagingDir/DNL/Saved/"*
+        rm -rf "$dnlStagingDir/Engine/Binaries/ThirdParty/SteamCMD/Linux/steamapps"
+      fi
+      rm -f "$dnlStagingDir/DNL/Binaries/Linux/"*.txt
+
+      if [ -z "$nodownload" ]; then
+        echo -n "Downloading DnL update"
+        logprint "Downloading DnL update" >/dev/null
+        doDownloadSteamCMD
+        cd "$steamcmdroot"
+        runSteamCMDAppUpdate "$dnlStagingDir" $validate
+        if [ $? -eq 0 ]; then
+          rm -rf "${dnlStagingDir}/steamapps/downloading/${appid}"
+        elif [ $? -eq 5 ]; then
+          echo "User ${steamlogin:-anonymous} login failed - please login to steamcmd manually"
+        fi
+
+        if [ -d "${dnlStagingDir}/steamapps/downloading/${appid}" ]; then
+          logprint "Update download interrupted"
+          return 1
+        fi
+
+        local curver="$(getCurrentVersion)"
+        local newver="$(getStagingVersion)"
+        local nextver="$(getAvailableVersion)"
+        if [[ -z "${newver}" || "$curver" == "$newver" ]]; then
+          if [ -z "$force" ]; then
+            logprint "Update download unsuccessful"
+            return 1
+          elif [ "${newver}" != "${nextver}" ]; then
+            logprint "Warning: staging directory update was unsuccessful"
+          fi
+        fi
+      fi
+    fi
+  fi
+
+  if [[ -f "$dnlserverroot/$dnlmanagerpidfile" && "$dnlserverroot/$dnlmanagerpidfile" -ot "${dnlserverroot}/${dnlupdatetimefile}" ]]; then
+    logprint "Server was updated while it was running"
+    bgupdate=1
+  fi
+
+  if [ -n "$downloadonly" ]; then
+    if [ -n "$appupdate" -a -n "$dnlStagingDir" -a "$dnlStagingDir" != "$dnlserverroot" ]; then
+      logprint "Server update downloaded"
+    fi
+    if [ -n "$modupdate" ]; then
+      logprint "Mod update downloaded"
+    fi
+    logprint "Not applying update - download-only requested"
+  elif [ -n "$appupdate" -o -n "$modupdate" -o -n "$bgupdate" ]; then
+    if false && [ -f "$dnlserverroot/version.txt" ]; then
+      dnlversion="$(<"$dnlserverroot/version.txt")"
+    else
+      dnlversion="$(getCurrentVersion)"
+    fi
+
+    if isTheServerRunning; then
+      if [ "$updatetype" == "safe" ]; then
+        saverootdir="${dnlserverroot}/DNL/Saved"
+        savedir="$(getSavedDnLsDirectory "${saverootdir}")"
+        mapname="$(getServerMapName)"
+        maxwait=30
+
+        if [ -z "$savedir" ]; then
+          logprint "Unable to find saved dnls directory"
+        else
+          mapfile="$(getServerMapFilename "${mapname}" "${savedir}")"
+
+          if [ ! -f "${mapfile}" ]; then
+            logprint "Unable to find saved dnl file"
+          elif [ "${mapfile##*.}" == ".tmp" ]; then
+            logprint "Map file doesn't exist, but temporary file does"
+          else
+            for (( i = 0; i < maxwait; i++ )); do
+              if [ "$(find "${mapfile}" -mmin -1)" ]; then
+                break
+              fi
+              logprint "Save file older than 1 minute. Delaying update."
+              sleep 30s
+            done
+            logprint "Save file newer than 1 minute. Performing an update."
+          fi
+        fi
+      elif [ "$updatetype" == "warn" ]; then
+        if ! doWarn update; then
+          return 1
+        fi
+      elif [ "$updatetype" == "ifempty" ]; then
+        numplayers=$(( $(numPlayersConnected) + 0 ))
+        if (( numplayers != 0 )); then
+          logprint "${numplayers} players are still connected"
+          return 1
+        fi
+      fi
+    fi
+
+    if [ -n "$saveworld" ]; then
+      logprint "Saving world"
+      doSaveWorld
+    fi
+
+    doStop update
+
+    # If user wants to back-up, we do it here.
+
+    if [ "$dnlBackupPreUpdate" == "true" ]; then
+        doBackup
+    fi
+
+    if [ -n "$appupdate" ]; then
+      if [ -d "${dnlStagingDir}" -a "${dnlStagingDir}" != "${dnlserverroot}" ]; then
+        logprint "Applying update from staging directory"
+        if [ "$(stat -c "%d" "$dnlserverroot")" == "$(stat -c "%d" "$dnlStagingDir")" ]; then
+          if [ -n "$useRefLinks" ]; then
+            cp -au --reflink=always --remove-destination "$dnlStagingDir/DNL/." "$dnlserverroot/DNL"
+            cp -au --reflink=always --remove-destination "$dnlStagingDir/Engine/." "$dnlserverroot/Engine"
+            cp -au --reflink=always --remove-destination "$dnlStagingDir/linux64/." "$dnlserverroot/linux64"
+            cp -u --reflink=always --remove-destination "$dnlStagingDir/"* "$dnlserverroot" >/dev/null 2>&1
+            cp -au --reflink=always --remove-destination "$dnlStagingDir/steamapps/." "$dnlserverroot/steamapps"
+          else
+            cp -alu --remove-destination "$dnlStagingDir/DNL/." "$dnlserverroot/DNL"
+            cp -alu --remove-destination "$dnlStagingDir/Engine/." "$dnlserverroot/Engine"
+            cp -alu --remove-destination "$dnlStagingDir/linux64/." "$dnlserverroot/linux64"
+            cp -lu --remove-destination "$dnlStagingDir/"* "$dnlserverroot" >/dev/null 2>&1
+            cp -au --remove-destination "$dnlStagingDir/steamapps/." "$dnlserverroot/steamapps"
+          fi
+        else
+          rsync -a "$dnlStagingDir/." "$dnlserverroot"
+        fi
+        cd "$dnlserverroot"
+        find Engine DNL linux64 -depth -print |
+          grep -v '^\(DNL/\(Saved\|Content/Mods\|Binaries/Linux/.*\.txt\)\|Engine/Binaries/ThirdParty/SteamCMD/Linux/steamapps\)' |
+          while read f; do
+            if [ ! -e "${dnlStagingDir}/${f}" ]; then
+              if [ -f "$f" ]; then
+                rm "${f}"
+              else
+                rmdir "${f}"
+              fi
+            fi
+          done
+        for f in *; do
+          if [[ -f "${f}" && ! -e "${dnlStagingDir}/${f}" ]]; then
+            rm "${f}"
+          fi
+        done
+      else
+        echo -n "Performing DnL update"
+        logprint "Performing DnL update" >/dev/null
+        doDownloadSteamCMD
+        cd "$steamcmdroot"
+        runSteamCMDAppUpdate "$dnlserverroot" $validate
+        if [ $? -eq 5 ]; then
+          echo "User ${steamlogin:-anonymous} login failed - please login to steamcmd manually"
+        fi
+      fi
+      # the current version should be the last version. We set our version
+      instver="$(getCurrentVersion)"
+      logprint "Update to $instver complete"
+    fi
+
+    if [ -n "$modupdate" ] && [ -z "$dnlflag_automanagedmods" ]; then
+      for modid in $(getModIds); do
+        if isModUpdateNeeded $modid; then
+          logprint "Updating mod $modid"
+          doExtractMod $modid
+          logprint "Mod $modid updated"
+        fi
+      done
+    fi
+    if [ -z "$bgupdate" ]; then
+      touch "${dnlserverroot}/${dnlupdatetimefile}"
+    fi
+  else
+    logprint "Your server is already up to date! The most recent version is ${bnumber}."
+  fi;
+
+  rm -f "${dnlserverroot}/${dnlupdatelockfile}"
+
+  if ! isTheServerRunning; then
+    # we restart the server only if it was started before the update
+    if [ -z "$noautostart" ]; then
+      if [ $serverWasAlive -eq 1 ] || [ -f "${dnlserverroot}/.startAfterUpdate-${instance}" ]; then
+        rm -f "${dnlserverroot}/.startAfterUpdate-${instance}"
+        if [ -n "$use_systemd" ]; then
+          sudo systemctl start "dnlmanager@$instance"
+        elif [ -n "$use_service" ]; then
+          if [ -f "/etc/init.d/dnlmanager" ]; then
+            sudo "/etc/init.d/dnlmanager" start "$instance"
+          elif [ -f "/etc/rc.d/init.d/dnlmanager" ]; then
+            sudo "/etc/rc.d/init.d/dnlmanager" start "$instance"
+          fi
+        elif [ -n "$use_upstart" ]; then
+          sudo start dnlmanager "service=$instance"
+        else
+          doStart --noautoupdate
+        fi
+      fi
+    fi
+  fi
+}
+
+#
+# Check if any mod update is available
+#
+checkForModUpdate(){
+  local updateavail=
+  local instmft=
+  local availmft=
+  local modname=
+  local steamdataroot="${steamdataroot:-${steamcmdroot}}"
+  local steamworkshopdir="${steamworkshopdir:-${steamdataroot}/steamapps/workshop}"
+  local cancheckmodavail=1
+  local modmissing=
+  local revstatcode=
+
+  if [[ " $* " =~ " --revstatus " ]]; then
+    revstatcode=1
+  fi
+  
+  if [ ! -d "${steamworkshopdir}" ]; then
+    echo "Error: ${steamworkshopdir} does not exist"
+    if [ -n "$revstatcode" ]; then return 4; else return 0; fi
+  fi
+
+  if [ ! -f "${steamworkshopdir}/appworkshop_${mod_appid}.acf" ]; then
+    echo "Error: appworkshop_${mod_appid}.acf not found at ${steamworkshopdir}"
+    cancheckmodavail=
+  fi
+
+  for modid in $(getModIds); do
+    availmft="$(getAvailModManifest "$modid")"
+    modname="$(getModName $modid)"
+    if [ -z "$availmft" ]; then
+      printf "Mod %d doesn't exist in the steam workshop\n" "$modid"
+      modmissing=1
+    elif [ -n "$cancheckmodavail" ]; then
+      instmft="$(getLocalModManifest "$modid")"
+      if [ -z "$instmft" ]; then
+        printf "Mod %d [%s] has not been downloaded\n" "$modid" "$modname"
+        updateavail=1
+      elif [ "$availmft" != "$instmft" ]; then
+        printf "Mod %d [%s] has been updated on the Steam workshop\n" "$modid" "$modname"
+        printf "Local manifest: %s\nSteam manifest: %s\n" "$instmft" "$availmft"
+        updateavail=1
+      fi
+    fi
+    if [ ! -d "$dnlserverroot/DNL/Content/Mods/$modid" ]; then
+      printf "Mod %d [%s] is not installed\n" "$modid" "$modname"
+      updateavail=1
+    elif isModUpdateNeeded $modid; then
+      printf "Mod %d [%s] update needs to be applied\n" "$modid" "$modname"
+      updateavail=1
+    fi
+  done
+
+  if [ -n "$updateavail" ]; then
+    if [ -n "$revstatcode" ]; then return 1; else return 0; fi
+  elif [ -z "$cancheckmodavail" ]; then
+    if [ -n "$revstatcode" ]; then return 3; else return 0; fi
+  elif [ -n "$modmissing" ]; then
+    return 2
+  else
+    if [ -n "$revstatcode" ]; then return 0; else return 1; fi
+  fi
+}
+
+#
+# Get the Mod IDs of the installed mods and the requested mods
+#
+getModIds(){
+  (
+    echo "${serverMapModId}"
+    echo "${dnl_TotalConversionMod}"
+    echo "${dnl_GameModIds}" | tr ',' '\n'
+    for v in "${!dnlmod_@}"; do
+      if [ "${!v}" != "disabled" ]; then
+        echo "${v#dnlmod_}"
+      fi
+    done
+    if [ -z "$ignoreInstalledMods" ]; then
+      find "${dnlserverroot}/DNL/Content/Mods" -maxdepth 1 -type d -printf "%P\n"
+    fi
+  ) | sort | uniq | grep '^[1-9][0-9]*$' | grep -v '^111111111$'
+}
+
+#
+# Gets local mod manifest ID
+#
+getLocalModManifest(){
+  local modid="$1"
+  local steamdataroot="${steamdataroot:-${steamcmdroot}}"
+  local steamworkshopdir="${steamworkshopdir:-${steamdataroot}/steamapps/workshop}"
+  if [ ! -f "${steamworkshopdir}/appworkshop_${mod_appid}.acf" ]; then return 0; fi
+  local instmft="$(sed -n '/^\t"WorkshopItemsInstalled"$/,/^\t[}]$/{/^\t\t"'"${modid}"'"$/,/^\t\t[}]$/{s|^\t\t\t"manifest"\t\t"\(.*\)"$|\1|p}}' <"${steamworkshopdir}/appworkshop_${mod_appid}.acf")"
+  echo "$instmft"
+}
+
+#
+# Gets available mod manifest ID
+#
+getAvailModManifest(){
+  local modid="$1"
+  local remmft="$(curl -s -d "itemcount=1&publishedfileids[0]=${modid}" http://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1 | sed -n 's|^[[:space:]]*"hcontent_file": "\(.*\)",|\1|p')"
+  echo "$remmft"
+}
+
+#
+# Checks if a mod update is available before trying to download it
+isModUpdateAvailable(){
+  local modid="$1"
+  local instmft="$(getLocalModManifest "$modid")"
+  local remmft="$(getAvailModManifest "$modid")"
+  local steamdataroot="${steamdataroot:-${steamcmdroot}}"
+  local steamworkshopdir="${steamworkshopdir:-${steamdataroot}/steamapps/workshop}"
+  if [ ! -f "${steamworkshopdir}/appworkshop_${mod_appid}.acf" ]; then return 0; fi
+  if [[ -n "${remmft}" && "${instmft}" != "${remmft}" ]]; then
+    return 0 # true
+  fi
+  return 1 # false
+}
+
+#
+# Downloads a mod from the Steam workshop
+#
+doDownloadMod(){
+  local modid=$1
+  local steamcmdroot="$steamcmdroot"
+  if [ -n "$dnlflag_automanagedmods" ]; then
+    steamcmdroot="$dnlserverroot/Engine/Binaries/ThirdParty/SteamCMD/Linux"
+  fi
+  doDownloadSteamCMD
+  local steamdataroot="${steamdataroot:-${steamcmdroot}}"
+  local steamworkshopdir="${steamworkshopdir:-${steamdataroot}/steamapps/workshop}"
+  local modsrcdir="${steamworkshopdir}/content/$mod_appid/$modid"
+  local moddldir="${steamworkshopdir}/downloads/$mod_appid"
+  cd "$steamcmdroot"
+  retries=10
+
+  # Bypass the 111111111 modid used by Primitive+
+  if [ "$modid" = "111111111" ]; then
+    return 0
+  fi
+
+  while true; do
+    echo -n "Downloading mod $modid"
+    local output
+    output=$(runSteamCMDspinnerSubst 5 +workshop_download_item $mod_appid $modid)
+    result=$?
+    if [ $result -eq 0 ]; then
+      modsrcdir="$(echo "$output" | sed -n 's@^Success. Downloaded item [0-9][0-9]* to "\([^"]*\)" .*@\1@p')"
+      break
+    elif [ $result -eq 5 ]; then
+      echo "User ${steamlogin:-anonymous} login failed - please login to steamcmd manually"
+      return 1
+    else
+      echo
+      failedmod="$(tail -n 20 "${steamcmd_workshoplog}" | sed -n 's|.* Download item \([0-9]*\) result : \(.*\)|\1\t\2|p' | grep -v $'\tOK' | tail -n1 | cut -f1)"
+      if [[ -n "$failedmod" && "$failedmod" != "$modid" ]]; then
+        echo "Mod $failedmod prevented mod update - removing failed mod"
+        doRemoveMods "$failedmod"
+      elif [ ! -d "$moddldir" ]; then
+        echo "Mod $modid download failed"
+        break
+      fi
+      (( retries = retries - 1 ))
+      if (( retries <= 0 )); then
+        echo "Retries exhausted"
+      fi
+      echo "Mod $modid not fully downloaded - retrying"
+    fi
+  done 5> >(cat)
+
+  if [ -f "$modsrcdir/mod.info" ]; then
+    echo "Mod $modid downloaded"
+    modsrcdirs[$modid]="$modsrcdir"
+    return 0
+  else
+    echo "Mod $modid was not successfully downloaded"
+    return 1
+  fi
+}
+
+#
+# Downloads all installed and requested mods from the Steam workshop
+#
+doDownloadAllMods(){
+  local fail=0
+  local success=0
+  for modid in $(getModIds); do
+    if isModUpdateAvailable $modid; then
+      if doDownloadMod $modid; then
+        success=1
+      else
+        fail=1
+      fi
+    fi
+  done
+  [[ $success == 1 || $fail == 0 ]] && return 0 || return 1
+}
+
+#
+# Checks if the files a mod owns need to be updated
+#
+isModUpdateNeeded(){
+  local modid=$1
+  local steamdataroot="${steamdataroot:-${steamcmdroot}}"
+  local steamworkshopdir="${steamworkshopdir:-${steamdataroot}/steamapps/workshop}"
+  local modsrcdir="${steamworkshopdir}/content/$mod_appid/$modid"
+  local moddestdir="$dnlserverroot/DNL/Content/Mods/$modid"
+  local modbranch="${mod_branch:-Windows}"
+
+  # Bypass the 111111111 modid used by Primitive+
+  if [ "$modid" = "111111111" ]; then
+    return 1
+  fi
+
+  if [ -n "${modsrcdirs[$modid]}" ]; then
+    modsrcdir="${modsrcdirs[$modid]}"
+  fi
+
+  for varname in "${!mod_branch_@}"; do
+    if [ "mod_branch_$modid" == "$varname" ]; then
+      modbranch="${!varname}"
+    fi
+  done
+
+  if [ -f "$moddestdir/.modbranch" ]; then
+    mv "$moddestdir/.modbranch" "$moddestdir/__dnlmanager_modbranch__.info"
+  fi
+
+  if [ \( ! -f "$moddestdir/__dnlmanager_modbranch__.info" \) ] || [ "$(<"$moddestdir/__dnlmanager_modbranch__.info")" != "$modbranch" ]; then
+    return 0
+  fi
+
+  if [ -f "$modsrcdir/mod.info" ]; then
+    if [ -f "$modsrcdir/${modbranch}NoEditor/mod.info" ]; then
+      modsrcdir="$modsrcdir/${modbranch}NoEditor"
+    fi
+
+    while read f; do
+      if [ \( ! -f "$moddestdir/${f%.z}" \) -o "$modsrcdir/$f" -nt "$moddestdir/${f%.z}" ]; then
+        return 0
+      fi
+    done < <(find "$modsrcdir" -type f ! -name "*.z.uncompressed_size" -printf "%P\n")
+  fi
+
+  return 1
+}
+
+#
+# Get the name of the specified mod
+#
+getModName(){
+  local modid=$1
+  local steamdataroot="${steamdataroot:-${steamcmdroot}}"
+  local steamworkshopdir="${steamworkshopdir:-${steamdataroot}/steamapps/workshop}"
+  local modsrcdir="${steamworkshopdir}/content/$mod_appid/$modid"
+
+  if [ -n "${modsrcdirs[$modid]}" ]; then
+    modsrcdir="${modsrcdirs[$modid]}"
+  fi
+
+  modname="$(curl -s "http://steamcommunity.com/sharedfiles/filedetails/?id=${modid}" | sed -n 's|^.*<div class="workshopItemTitle">\([^<]*\)</div>.*|\1|p')"
+
+  if [ -n "$modname" ]; then
+    echo "$modname"
+  else
+    perl -e '
+      my $data;
+      { local $/; $data = <STDIN>; }
+      my $mapnamelen = unpack("@0 L<", $data);
+      my $mapname = substr($data, 4, $mapnamelen - 1);
+      print $mapname
+    ' <"${modsrcdir}/mod.info"
+  fi
+}
+
+#
+# Checks if any installed or requested mods need to be updated
+#
+isAnyModUpdateNeeded(){
+  modnamesupdated=""
+  local ismodupdateneeded=1
+  for modid in $(getModIds); do
+    if isModUpdateNeeded $modid; then
+      ismodupdateneeded=0
+      if [ -n "$modnamesupdated" ]; then
+        modnamesupdated="${modnamesupdated}, "
+      fi
+      modnamesupdated="${modnamesupdated}$(getModName "$modid")"
+    fi
+  done
+
+  return $ismodupdateneeded
+}
+
+#
+# Extracts a mod into the DnL Mods directory
+#
+doExtractMod(){
+  local modid=$1
+  local steamdataroot="${steamdataroot:-${steamcmdroot}}"
+  local steamworkshopdir="${steamworkshopdir:-${steamdataroot}/steamapps/workshop}"
+  local modsrcdir="${steamworkshopdir}/content/$mod_appid/$modid"
+  local moddestdir="$dnlserverroot/DNL/Content/Mods/$modid"
+  local modextractdir="$moddestdir"
+  local modbranch="${mod_branch:-Windows}"
+
+  if [[ -n "$dnlStagingDir" && -d "$dnlStagingDir" ]]; then
+    modextractdir="$dnlStagingDir/Mods/$modid"
+  fi
+
+  # Bypass the 111111111 modid used by Primitive+
+  if [ "$modid" = "111111111" ]; then
+    return 0
+  fi
+
+  if [ -n "${modsrcdirs[$modid]}" ]; then
+    modsrcdir="${modsrcdirs[$modid]}"
+  fi
+
+  for varname in "${!mod_branch_@}"; do
+    if [ "mod_branch_$modid" == "$varname" ]; then
+      modbranch="${!varname}"
+    fi
+  done
+
+  if [ -f "$modextractdir/.modbranch" ]; then
+    mv "$modextractdir/.modbranch" "$modextractdir/__dnlmanager_modbranch__.info"
+  fi
+
+  if [ \( ! -f "$modextractdir/__dnlmanager_modbranch__.info" \) ] || [ "$(<"$modextractdir/__dnlmanager_modbranch__.info")" != "$modbranch" ]; then
+    rm -rf "$modextractdir"
+  fi
+
+  if [ -f "$modsrcdir/mod.info" ]; then
+    echo "Copying files to $modextractdir"
+
+    if [ -f "$modsrcdir/${modbranch}NoEditor/mod.info" ]; then
+      modsrcdir="$modsrcdir/${modbranch}NoEditor"
+    fi
+
+    find "$modsrcdir" -type d -printf "$modextractdir/%P\0" | xargs -0 -r mkdir -p
+
+    find "$modextractdir" -type f ! -name '.*' -printf "%P\n" | while read f; do
+      if [ \( ! -f "$modsrcdir/$f" \) -a \( ! -f "$modsrcdir/${f}.z" \) ]; then
+        rm "$modextractdir/$f"
+      fi
+    done
+
+    find "$modextractdir" -depth -type d -printf "%P\n" | while read d; do
+      if [ ! -d "$modsrcdir/$d" ]; then
+        rmdir "$modextractdir/$d"
+      fi
+    done
+
+    find "$modsrcdir" -type f ! \( -name '*.z' -or -name '*.z.uncompressed_size' \) -printf "%P\n" | while read f; do
+      if [ \( ! -f "$modextractdir/$f" \) -o "$modsrcdir/$f" -nt "$modextractdir/$f" ]; then
+        printf "%10d  %s  " "`stat -c '%s' "$modsrcdir/$f"`" "$f"
+        if [[ -n "$useRefLinks" && "$(stat -c "%d" "$modsrcdir")" == "$(stat -c "%d" "$modextractdir")" ]]; then
+          cp --reflink=auto "$modsrcdir/$f" "$modextractdir/$f"
+        else
+          cp "$modsrcdir/$f" "$modextractdir/$f"
+        fi
+        echo -ne "\r\\033[K"
+      fi
+    done
+
+    find "$modsrcdir" -type f -name '*.z' -printf "%P\n" | while read f; do
+      if [ \( ! -f "$modextractdir/${f%.z}" \) -o "$modsrcdir/$f" -nt "$modextractdir/${f%.z}" ]; then
+        printf "%10d  %s  " "`stat -c '%s' "$modsrcdir/$f"`" "${f%.z}"
+        perl -M'Compress::Raw::Zlib' -e '
+          my $sig;
+          read(STDIN, $sig, 8) or die "Unable to read compressed file: $!";
+          if ($sig != "\xC1\x83\x2A\x9E\x00\x00\x00\x00"){
+            die "Bad file magic";
+          }
+          my $data;
+          read(STDIN, $data, 24) or die "Unable to read compressed file: $!";
+          my ($chunksizelo, $chunksizehi,
+              $comprtotlo,  $comprtothi,
+              $uncomtotlo,  $uncomtothi)  = unpack("(LLLLLL)<", $data);
+          my @chunks = ();
+          my $comprused = 0;
+          while ($comprused < $comprtotlo) {
+            read(STDIN, $data, 16) or die "Unable to read compressed file: $!";
+            my ($comprsizelo, $comprsizehi,
+                $uncomsizelo, $uncomsizehi) = unpack("(LLLL)<", $data);
+            push @chunks, $comprsizelo;
+            $comprused += $comprsizelo;
+          }
+          foreach my $comprsize (@chunks) {
+            read(STDIN, $data, $comprsize) or die "File read failed: $!";
+            my ($inflate, $status) = new Compress::Raw::Zlib::Inflate();
+            my $output;
+            $status = $inflate->inflate($data, $output, 1);
+            if ($status != Z_STREAM_END) {
+              die "Bad compressed stream; status: " . ($status);
+            }
+            if (length($data) != 0) {
+              die "Unconsumed data in input"
+            }
+            print $output;
+          }
+        ' <"$modsrcdir/$f" >"$modextractdir/${f%.z}"
+        touch -c -r "$modsrcdir/$f" "$modextractdir/${f%.z}"
+        echo -ne "\r\\033[K"
+      fi
+    done
+
+    modname="$(curl -s "http://steamcommunity.com/sharedfiles/filedetails/?id=${modid}" | sed -n 's|^.*<div class="workshopItemTitle">\([^<]*\)</div>.*|\1|p')"
+
+    if [ -f "${modextractdir}/.mod" ]; then
+      rm "${modextractdir}/.mod"
+    fi
+
+    perl -e '
+      my $data;
+      { local $/; $data = <STDIN>; }
+      my $mapnamelen = unpack("@0 L<", $data);
+      my $mapname = substr($data, 4, $mapnamelen - 1);
+      my $nummaps = unpack("@" . ($mapnamelen + 4) . " L<", $data);
+      my $pos = $mapnamelen + 8;
+      my $modname = ($ARGV[1] || $mapname) . "\x00";
+      my $modnamelen = length($modname);
+      my $modpath = "../../../DNL/Content/Mods/" . $ARGV[0] . "\x00";
+      my $modpathlen = length($modpath);
+      print pack("L< L< L< Z$modnamelen L< Z$modpathlen L<",
+        $ARGV[0], 0, $modnamelen, $modname, $modpathlen, $modpath,
+        $nummaps);
+      for (my $mapnum = 0; $mapnum < $nummaps; $mapnum++){
+        my $mapfilelen = unpack("@" . ($pos) . " L<", $data);
+        my $mapfile = substr($data, $mapnamelen + 12, $mapfilelen);
+        print pack("L< Z$mapfilelen", $mapfilelen, $mapfile);
+        $pos = $pos + 4 + $mapfilelen;
+      }
+      print "\x33\xFF\x22\xFF\x02\x00\x00\x00\x01";
+    ' $modid "$modname" <"$modextractdir/mod.info" >"${modextractdir}.mod"
+
+    if [ -f "$modextractdir/modmeta.info" ]; then
+      cat "$modextractdir/modmeta.info" >>"${modextractdir}.mod"
+    else
+      echo -ne '\x01\x00\x00\x00\x08\x00\x00\x00ModType\x00\x02\x00\x00\x001\x00' >>"${modextractdir}.mod"
+    fi
+
+    echo "$modbranch" >"$modextractdir/__dnlmanager_modbranch__.info"
+
+    if [[ "$modextractdir" != "$moddestdir" ]]; then
+      if [ ! -d "${moddestdir}" ]; then
+        mkdir -p "${moddestdir}"
+      fi
+      if [ "$(stat -c "%d" "$modextractdir")" == "$(stat -c "%d" "$moddestdir")" ]; then
+        if [ -n "$useRefLinks" ]; then
+          cp -au --reflink=always --remove-destination "${modextractdir}/." "${moddestdir}"
+        else
+          cp -alu --remove-destination "${modextractdir}/." "${moddestdir}"
+        fi
+      else
+        cp -au --remove-destination "${modextractdir}/." "${moddestdir}"
+      fi
+      find "${moddestdir}" -type f ! -name '.*' -printf "%P\n" | while read f; do
+        if [ ! -f "${modextractdir}/${f}" ]; then
+          rm "${moddestdir}/${f}"
+        fi
+      done
+      find "$modextractdir" -depth -type d -printf "%P\n" | while read d; do
+        if [ ! -d "$modsrcdir/$d" ]; then
+          rmdir "$modextractdir/$d"
+        fi
+      done
+      if [[ -n "$useRefLinks" && "$(stat -c "%d" "$modextractdir")" == "$(stat -c "%d" "$moddestdir")" ]]; then
+        cp -u --reflink=always "${modextractdir}.mod" "${moddestdir}.mod"
+      else
+        cp -u "${modextractdir}.mod" "${moddestdir}.mod"
+      fi
+    fi
+  fi
+}
+
+#
+# Downloads mod and installs it into mods directory
+#
+doInstallMod(){
+  local modid
+  local steamdataroot="${steamdataroot:-${steamcmdroot}}"
+  local steamworkshopdir="${steamworkshopdir:-${steamdataroot}/steamapps/workshop}"
+  for modid in ${1//,/ }; do
+    if [[ " $* " =~ *" --validate " ]]; then
+      if [ -f "${steamworkshopdir}/appworkshop_${mod_appid}.acf" ]; then
+        sed -i "/^\\t\\t\"${modid}\"/,/^\\t\\t}/d" "${steamworkshopdir}/appworkshop_${mod_appid}.acf"
+      fi
+    fi
+
+    if doDownloadMod $modid; then
+      doExtractMod $modid
+      echo "Mod $modid installed"
+    fi
+  done
+}
+
+#
+# Downloads and installs all requested mods
+#
+doInstallAllMods(){
+  for modid in $(getModIds); do
+    doInstallMod "$modid" "$@"
+  done
+}
+
+#
+# Removes all mods from the mods directory
+#
+doUninstallAllMods(){
+  for modid in $(getModIds); do
+    if [[ "$modid" != "111111111" && "$modid" != "TheCenter" ]]; then
+      doUninstallMod "$modid"
+    fi
+  done
+}
+
+#
+# Removes mod from mods directory
+#
+doUninstallMod(){
+  local modid
+  for modid in ${1//,/ }; do
+    local moddir="$dnlserverroot/DNL/Content/Mods/$modid"
+    local modfile="$dnlserverroot/DNL/Content/Mods/${modid}.mod"
+    if [ -d "${moddir}" ]; then
+      rm -rf "${moddir}"
+    fi
+    if [ -f "${modfile}" ]; then
+      rm -f "$modfile"
+    fi
+  done
+}
+
+#
+# Enables a mod in the config
+#
+doEnableMod(){
+  local modid="${1%=*}"
+  local modtype="${1#*=}"
+  if [ "$modtype" = "$1" ]; then
+    modtype=game
+  fi
+  local modvar="dnlmod_${modid}"
+  if [ -n "${!modvar}" ]; then
+    sed -i "s|^\(${modvar}\)=[^ ]*|\1=${modtype}|" "$configfile"
+  else
+    echo "${modvar}=${modtype}" >>"$configfile"
+  fi
+}
+
+#
+# Disable a mod in the config
+#
+doDisableMod(){
+  local modid="$1"
+  local modvar="dnlmod_$modid"
+  if [ "$dnl_GameModIds" = *"$modid"* ]; then
+    sed -i "s|^\(dnl_GameModIds=\(\|[\"']\)\(\|[^\"' ]*,\)\)${modid},*|\1|" "$configfile"
+  fi
+  if [ -n "$modvar" ]; then
+    sed -i "s|^\(dnlmod_${modid}\)=[^ ]*|\1=disabled|" "$configfile"
+  fi
+}
+
+#
+# Removes mod from steamcmd workshop directory
+#
+doRemoveMods(){
+  local modid
+  local steamdataroot="${steamdataroot:-${steamcmdroot}}"
+  local steamworkshopdir="${steamworkshopdir:-${steamdataroot}/steamapps/workshop}"
+  for modid in ${1//,/ }; do
+    if [ -f "${steamworkshopdir}/appworkshop_${mod_appid}.acf" ]; then
+      sed -i "/^\\t\\t\"${modid}\"/,/^\\t\\t}/d" "${steamworkshopdir}/appworkshop_${mod_appid}.acf"
+    fi
+
+    if [ -d "${steamworkshopdir}/content/${mod_appid}/${modid}" ]; then
+      rm -rf "${steamworkshopdir}/content/${mod_appid}/${modid}"
+    fi
+
+    if [ -d "${steamworkshopdir}/downloads/${mod_appid}/${modid}" ]; then
+      rm -rf "${steamworkshopdir}/downloads/${mod_appid}/${modid}"
+    fi
+  done
+}
+
+#
+# Copies server state to a backup directory
+#
+doBackup(){
+  local datestamp=`date +"%Y-%m-%d_%H.%M.%S"`
+  local daystamp=`date +"%Y-%m-%d"`
+  local backupdir="${dnlbackupdir}/${datestamp}"
+  local backupdirdaily="${dnlbackupdir}/${daystamp}"
+  local saverootdir="${dnlserverroot}/DNL/Saved"
+  local savedcfgdir="${saverootdir}/Config/WindowsServer"
+  local savedir="$(getSavedDnLsDirectory "${saverootdir}")"
+  local mapname="$(getServerMapName)"
+  mkdir -p "$backupdir"
+  mkdir -p "$backupdirdaily"
+
+  if [[ -z "$savedir" ]]; then
+    return 1
+  fi
+
+  echo "${NORMAL} Saved dnls directory is ${savedir}"
+
+  # DnL server uses Write-Unlink-Rename
+  echo -ne "${NORMAL} Copying DnL world file (${mapname}) "
+
+  local mapfile="$(getServerMapFilename "${mapname}" "${savedir}")"
+
+  if [ -f "${mapfile}" ]; then
+    cp -p "${mapfile}" "${backupdir}/${mapname}.dnl"
+  fi
+
+  if [ -f "${backupdir}/${mapname}.dnl" ]; then
+    echo -e "${NORMAL}\e[68G[   ${GREEN}OK${NORMAL}   ]"
+  else
+    echo -e "${NORMAL}\e[68G[ ${RED}FAILED${NORMAL} ]"
+  fi
+
+  # DnL server uses Lock-Truncate-Write-Unlock
+  # Unfortunately we can't lock the file, as
+  # DnL server uses a non-blocking lock and will
+  # fail to update the file if the lock fails.
+  echo -e "${NORMAL} Copying DnL profile files"
+  for f in "${savedir}/"*.dnlprofile; do
+    if [ -f "${f}" ]; then
+      echo -ne "${NORMAL}   ${f##*/} "
+      cp -p "${f}" "${backupdir}/${f##*/}"
+      if [ ! -s "${backupdir}/${f##*/}" ]; then
+        sleep 2
+        cp -p "${f}" "${backupdir}/${f##*/}"
+      fi
+      # If both attempts fail, server may have
+      # crashed between truncate and write
+      if [[ ! -s "${backupdir}/${f##*/}" && -f "${f%.dnlprofile}.tmpprofile" ]]; then
+        cp -p "${f%.dnlprofile}.tmpprofile" "${backupdir}/${f##*/}"
+      fi
+      if [ -s "${backupdir}/${f##*/}" ]; then
+        echo -e "${NORMAL}\e[68G[   ${GREEN}OK${NORMAL}   ]"
+      else
+        echo -e "${NORMAL}\e[68G[ ${RED}FAILED${NORMAL} ]"
+      fi
+    fi
+  done
+
+  # DnL server uses Lock-Truncate-Write-Unlock
+  echo -e "${NORMAL} Copying DnL tribe files "
+  for f in "${savedir}/"*.dnltribe; do
+    if [ -f "${f}" ]; then
+      echo -ne "${NORMAL}   ${f##*/} "
+      cp -p "${f}" "${backupdir}/${f##*/}"
+      if [ ! -s "${backupdir}/${f##*/}" ]; then
+        sleep 2
+        cp -p "${f}" "${backupdir}/${f##*/}"
+      fi
+      # If both attempts fail, server may have
+      # crashed between truncate and write
+      if [[ ! -s "${backupdir}/${f##*/}" && -f "${f%.dnltribe}.tmptribe" ]]; then
+        cp -p "${f%.dnltribe}.tmptribe" "${backupdir}/${f##*/}"
+      fi
+      if [ -s "${backupdir}/${f##*/}" ]; then
+        echo -e "${NORMAL}\e[68G[   ${GREEN}OK${NORMAL}   ]"
+      else
+        echo -e "${NORMAL}\e[68G[ ${RED}FAILED${NORMAL} ]"
+      fi
+    fi
+  done
+
+  # DnL server uses Lock-Truncate-Write-Unlock
+  echo -e "${NORMAL} Copying DnL tribute tribe files "
+  for f in "${savedir}/"*.dnltributetribe; do
+    if [ -f "${f}" ]; then
+      echo -ne "${NORMAL}   ${f##*/} "
+      cp -p "${f}" "${backupdir}/${f##*/}"
+      if [ ! -s "${backupdir}/${f##*/}" ]; then
+        sleep 2
+        cp -p "${f}" "${backupdir}/${f##*/}"
+      fi
+      # If both attempts fail, server may have
+      # crashed between truncate and write
+      if [[ ! -s "${backupdir}/${f##*/}" && -f "${f%.dnltributetribe}.tmptributetribe" ]]; then
+        cp -p "${f%.dnltributetribe}.tmptributetribe" "${backupdir}/${f##*/}"
+      fi
+      if [ -s "${backupdir}/${f##*/}" ]; then
+        echo -e "${NORMAL}\e[68G[   ${GREEN}OK${NORMAL}   ]"
+      else
+        echo -e "${NORMAL}\e[68G[ ${RED}FAILED${NORMAL} ]"
+      fi
+    fi
+  done
+
+  # DnL server uses Lock-Truncate-Write-Unlock
+  echo -ne "${NORMAL} Copying GameUserSettings.ini "
+  cp -p "${savedcfgdir}/GameUserSettings.ini" "${backupdir}/GameUserSettings.ini"
+  if [ ! -s "${backupdir}/GameUserSettings.ini" ]; then
+    sleep 2
+    cp -p "${f}" "${backupdir}/${f##*/}"
+  fi
+  if [ -f "${backupdir}/GameUserSettings.ini" ]; then
+    echo -e "${NORMAL}\e[68G[   ${GREEN}OK${NORMAL}   ]"
+  else
+    echo -e "${NORMAL}\e[68G[ ${RED}FAILED${NORMAL} ]"
+  fi
+   
+   
+   echo -ne "${NORMAL} Copying Game.ini "
+  
+  cp -p "${savedcfgdir}/Game.ini" "${backupdir}/Game.ini"
+  if [ ! -s "${backupdir}/Game.ini" ]; then
+    sleep 2
+    cp -p "${f}" "${backupdir}/${f##*/}"
+  fi
+  if [ -f "${backupdir}/Game.ini" ]; then
+    echo -e "${NORMAL}\e[68G[   ${GREEN}OK${NORMAL}   ]"
+  else
+    echo -e "${NORMAL}\e[68G[ ${RED}FAILED${NORMAL} ]"
+  fi
+  
+  
+  #Tar the files and remove the original Backup Directory.  Saves about 50MB of disk space per backup
+
+  echo -ne "${NORMAL} Compressing Backup "
+
+  tar -jcf "${dnlbackupdir}/${daystamp}/${datestamp}.tar.bz2" -C "${dnlbackupdir}" "${datestamp}"
+  rm -rf ${backupdir}
+
+  if [ -f "${dnlbackupdir}/${daystamp}/${datestamp}.tar.bz2" ]; then
+   echo -e "${NORMAL}\e[68G[   ${GREEN}OK${NORMAL}   ]"
+  else
+    echo -e "${NORMAL}\e[68G[ ${RED}FAILED${NORMAL} ]"
+  fi
+  echo -e "${NORMAL} Created Backup: ${GREEN} ${datestamp}.tar.bz2${NORMAL}"
+
+  if [ -n "$dnlMaxBackupSizeGB" ] && (( dnlMaxBackupSizeGB >= 1 )); then
+    (( dnlMaxBackupSizeMB = dnlMaxBackupSizeGB * 1024 ))
+  fi
+
+  if [ -n "$dnlMaxBackupSizeMB" ] && (( dnlMaxBackupSizeMB > 64 )); then
+    find "${dnlbackupdir}" -type f -printf "%T@\t%s\t%p\n" |
+      sort -n -r |
+      cut -f2-3 |
+      (sz=0; while read fsz f; do
+        if (( sz / 1048576 > dnlMaxBackupSizeMB )); then
+          rm "$f"
+        fi
+        (( sz += fsz ))
+      done)
+  fi
+}
+
+#
+# Install a cron job to execute a particular command
+#
+doInstallCronJob(){
+  hour='*'
+  minute='0'
+  cmdopts="${dnlCronExtraOpts}"
+  cmdargs=""
+  instargs=""
+  output=">/dev/null 2>&1"
+  dnlmanagerpath="${0}"
+  command="$1"
+  shift
+
+  for opt in "$@"; do
+    case "$opt" in
+      --daily)
+      ;;
+      --hourly)
+        hour='*'
+      ;;
+      --hour=*)
+        hour="${opt#--hour=}"
+      ;;
+      --minute=*)
+        minute="${opt#--minute=}"
+      ;;
+      --enable-output)
+        output=
+      ;;
+      --arg=*)
+        cmdargs="${cmdargs} $(printf "%q" "${opt#--arg=}")"
+      ;;
+      --*)
+        cmdopts="${cmdopts} $(printf "%q" "${opt}")"
+      ;;
+      *)
+        cmdargs="${cmdargs} $(printf "%q" "${opt}")"
+      ;;
+    esac
+  done
+
+  if [ -n "$allinstances" ]; then
+    instargs="@all"
+  else
+    for inst in "${instances[@]}"; do
+      instargs="${instargs} $(printf "%q" "@${inst}")"
+    done
+  fi
+
+  cronjob="${minute} ${hour} * * * ${dnlmanagerpath} --cronjob ${command} ${instargs} ${cmdopts} --args ${cmdargs} -- ${output}"
+
+  (crontab -l | \
+    sed -e "\\# [*] [*] [*] ${dnlmanagerpath} --cronjob ${command} ${instargs} #d";
+    echo "${cronjob}" ) | \
+    crontab -
+}
+
+#
+# Removes an installed cron job
+#
+doRemoveCronJob(){
+  dnlmanagerpath="${0}"
+  command="$1"
+
+  crontab -l | \
+    sed -e "\\# [*] [*] [*] ${dnlmanagerpath} --cronjob ${command} @${instance} #d" | \
+    crontab -
+}
+
+#
+# Print the status of the server (running? online? version?)
+#
+printStatus(){
+  if isTheServerRunning ;then
+    echo -e "$NORMAL" "Server running: " "$GREEN" "Yes" "$NORMAL"
+    echo -e "$NORMAL" "Server PID: " "$GREEN" "$(getServerPID)" "$NORMAL"
+  else
+    echo -e "$NORMAL" "Server running: " "$RED" "No" "$NORMAL"
+  fi
+
+  if isTheServerUp ;then
+    echo -e "$NORMAL" "Server listening: " "$RED" "No" "$NORMAL"
+  else
+    echo -e "$NORMAL" "Server listening: " "$GREEN" "Yes" "$NORMAL"
+    perl -MSocket -e '
+      my $port = int($ARGV[0]);
+      socket(my $socket, PF_INET, SOCK_DGRAM, 0);
+      setsockopt($socket, SOL_SOCKET, SO_RCVTIMEO, pack("i4", 1, 0, 0, 0));
+      my $sockaddr = pack_sockaddr_in($port, inet_aton($ARGV[1]));
+      send($socket, "\xff\xff\xff\xffTSource Engine Query\x00", 0, $sockaddr);
+      my $data = "";
+      recv($socket, $data, 1400, 0) or (print "Unable to query server\n" and exit(1));
+      my ($servername, $mapname, $game, $fullname, $rest) = split(/\x00/, substr($data, 6), 5);
+      my $players = ord(substr($rest, 2, 1));
+      my $maxplayers = ord(substr($rest, 3, 1));
+      print "Server Name: $servername\n";
+      print "Players: $players / $maxplayers\n";
+      send($socket, "\xff\xff\xff\xff\x55\xff\xff\xff\xff", 0, $sockaddr);
+      $data = "";
+      recv($socket, $data, 1400, 0) or (print "Challenge request failed" and exit(1));
+      if (ord(substr($data, 4, 1)) == 0x41) {
+        my $chal = substr($data, 5);
+        send($socket, "\xff\xff\xff\xff\x55" . $chal, 0, $sockaddr);
+        $data = "";
+        recv($socket, $data, 1400, 0) or (print "A2S_PLAYERS request failed" and exit(1));
+      }
+      ord(substr($data, 4, 1)) != 0x44 and (print ("A2S_PLAYERS Response: : " . unpack("H*", $data)) and exit(1));
+      my $players = ord(substr($data, 5, 1));
+      my $active = 0;
+      my $pdata = substr($data, 6);
+      for my $i (0 .. $players) {
+        my $idx = ord(substr($pdata, 0, 1));
+        my ($name, $rest) = split(/\x00/, substr($pdata, 1), 2);
+        $pdata = substr($rest, 8);
+        if ($name ne "") {
+          $active = $active + 1;
+        }
+      }
+      print "Active Players: $active\n";
+      ' "$(getQueryPort)" "${dnl_MultiHome:-127.0.0.1}"
+
+    if isTheServerOnline; then
+      echo -e "$NORMAL" "Server online: " "$GREEN" "Yes" "$NORMAL"
+      echo -e "$NORMAL" "DnLServers link: " "$GREEN" "http://dnlservers.net/server/${publicip}:$(getQueryPort)" "$NORMAL"
+    else
+      echo -e "$NORMAL" "Server online: " "$RED" "No" "$NORMAL"
+    fi
+  fi
+
+  instver="$(getCurrentVersion)"
+  echo -e "$NORMAL" "Server build ID: " "$GREEN" $instver "$NORMAL"
+  if false && [ -f "$dnlserverroot/version.txt" ]; then
+    echo -e "$NORMAL" "Server version: " "$GREEN" "$(<"$dnlserverroot/version.txt")" "$NORMAL"
+  fi
+}
+
+getAllInstanceNames(){
+  declare -A instancenames
+  for varname in "${!configfile_@}"; do
+    instancename="${varname#configfile_}"
+    instancenames[${instancename}]="${instancename}"
+  done
+  for f in /etc/dnlmanager/instances/*.cfg; do
+    if [ -f "${f}" ]; then
+      instancename="${f##*/}"
+      instancename="${instancename%.cfg}"
+      instancenames[${instancename}]="${instancename}"
+    fi
+  done
+  for f in ${HOME}/.config/dnlmanager/instances/*.cfg; do
+    if [ -f "${f}" ]; then
+      instancename="${f##*/}"
+      instancename="${instancename%.cfg}"
+      instancenames[${instancename}]="${instancename}"
+    fi
+  done
+
+  echo "${instancenames[@]}"
+}
+
+doListAllInstances(){
+  if [ "$1" == "--brief" ]; then
+    getAllInstanceNames
+  else
+    echo "The following instances are available:"
+    for n in $(getAllInstanceNames); do
+      (
+        echo -n "  @${n}: "
+        useConfig "$n"
+        echo "${configfile} => ${dnlserverroot}"
+      )
+    done
+  fi
+}
+
+doPrintConfig(){
+  declare -A vars
+  declare -A vals
+  for v in $(eval echo \$\{\!{a..z}\*\} \$\{\!{A..Z}\*\} \$\{\!_\*\}); do
+    vals["$v"]="${!v}"
+  done
+  for cfgfile in "$configfile" "${HOME}/${dnlstUserCfgFile}" "${dnlstGlobalCfgFile}"; do
+    while read v; do
+      val="$(source "$cfgfile"; echo "${!v}")"
+      if [[ "$val" = "${vals[$v]}" && -z "${vars[$v]}" ]]; then
+        vars["$v"]="$cfgfile"
+        echo "${cfgfile} => ${v}"
+      fi
+    done < <(sed -n 's/^[[:space:]]*\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' <"$cfgfile")
+  done
+}
+
+useConfig() {
+  configfile=
+  if [ -f "/etc/dnlmanager/instances/${1}.cfg" ]; then
+    configfile="/etc/dnlmanager/instances/${1}.cfg"
+  fi
+  if [[ -f "${HOME}/.config/dnlmanager/instances/${1}.cfg" && "${HOME}/.config/dnlmanager/instances/${1}.cfg" -nt "/etc/dnlmanager/instances/${1}.cfg" ]]; then
+    configfile="${HOME}/.config/dnlmanager/instances/${1}.cfg"
+  fi
+  for varname in "${!configfile_@}"; do
+    if [ "configfile_$1" == "$varname" ]; then
+      configfile="${!varname}"
+      break
+    fi
+  done
+  if [[ -z "$configfile" && -n "$dnlSingleInstance" ]]; then
+    if [ -f "${HOME}/${dnlstUserCfgFile}" ]; then
+      configfile="${HOME}/${dnlstUserCfgFile}"
+    else
+      configfile="${dnlstGlobalCfgFile}"
+    fi
+  else
+    if [ -z "$configfile" ]; then
+      echo "Error: no config files for instance $1"
+      exit 1
+    fi
+    if [ ! -f "$configfile" ]; then
+      echo "Error: config file $configfile does not exist"
+      exit 1
+    fi
+    source "$configfile"
+  fi
+  if [ -z "$dnlserverroot" ]; then
+    echo "Error: dnlserverroot not set"
+    exit 1
+  fi
+  dnlautorestartfile="${dnlautorestartfile:-DNL/Saved/.autorestart-${1}}"
+  dnloldautorestartfile="DNL/Saved/.autorestart"
+  dnlserverpidfile="${dnlserverpidfile:-DNL/Saved/.dnlserver-${1}.pid}"
+  dnlserveroldpidfile="DNL/Saved/.dnlserver.pid"
+  dnlmanagerpidfile="${dnlmanagerpidfile:-DNL/Saved/.dnlmanager-${1}.pid}"
+  dnlwarnlockfile="${dnlwarnlockfile:-DNL/Saved/.dnl-warn-${1}.lock}"
+  # This is linked to the directory, not to the instance
+  dnlupdatelockfile="${dnlupdatelockfile:-DNL/Saved/.dnl-update.lock}"
+  dnlupdatetimefile="${dnlupdatetimefile:-DNL/Saved/.dnl-update.time}"
+}
+
+addDnLOpt() {
+  local optname="${1%%=*}"
+  local optval="${1#*=}"
+  local optdash="${optname:0:1}"
+  
+  optname="${optname#-}"
+  optname="${optname//[^A-Za-z0-9_]/_}"
+  
+  if [[ "${optval}" == "${optname}" ]]; then
+    optval=""
+  fi
+  if [[ "${optdash}" == "-" ]]; then
+    if [[ -z "${optval}" ]]; then
+      IFS="" read -r "dnlflag_${optname}" <<<"true"
+    else
+      IFS="" read -r "dnlopt_${optname}" <<<"${optval}"
+    fi
+  else
+    IFS="" read -r "dnl_${optname}" <<<"${optval}"
+  fi
+}
+
+showUsage() {
+  echo -e "Usage: dnlmanager [Commands]\n"
+  cat <<-EOE
+	Commands can be followed by one or more @instance arguments
+	The special '@all' instance selects all instances
+	Commands may also be followed by zero or more --options
+
+	Commands that take no instances:
+	Command               Description
+	upgrade-tools         Check for a new DnL Server Tools version and upgrades it if needed
+	uninstall-tools       Uninstall the DnL Server Tools
+	useconfig <name>      Sets the default instance for the commands that follow
+	remove-mods <modid>   Remove one or more mods from the steamcmd workshop directory
+	list-instances        Lists all available instances
+	--help                Show this help
+	--version             Show the version info of DnL Server Tools
+
+	Commands that take one or more instances:
+	Command               Description
+	backup                Saves a backup of your server inside the backup directory
+	broadcast <msg>       Sends a message to all users connected to server
+	saveworld             Saves the game world to disk
+	rconcmd <cmd>         Execute RCON command on server
+	checkupdate           Check for a new DnL server version
+	checkmodupdate        Checks for any mods needing updates
+	install               Install the DnL server files from steamcmd
+	installmod <modid>    Installs a mod from the Steam workshop
+	uninstallmod <modid>  Removes the mod from the Mods directory
+	reinstallmod <modid>  Removes and re-installs a mod in the Mods directory
+	enablemod <modid>     Enables a mod in the config
+	disablemod <modid>    Disables a mod in the config
+	installmods           Installs all enabled mods
+	uninstallmods         Removes all installed mods from the Mods directory
+	install-cronjob <cmd> Adds a cron job using the specified command
+	remove-cronjob <cmd>  Removes a cron job that used the specified command
+	restart               Stops the server and then starts it
+	run                   Runs the server without daemonizing
+	start                 Starts the server
+	stop                  Stops the server
+	cancelshutdown        Aborts a running stop --warn or update --warn
+	status                Returns the status of the current DnL server instance
+	printconfig           Displays which settings are sourced from which config file
+	getpid                Gets the running server PID
+	update                Check for a new DnL server version, if needed, stops the server, updates it, and starts it again
+
+	Commands which invoke steamcmd take the following options:
+	   --verbose          Show steamcmd output
+	   --spinner          Use a spinner for progress (default)
+	   --dots             Use dots for progress
+
+	Update command takes the following options:
+	   --force            Apply update without checking the current version
+	   --safe             Wait for server to perform world save and update (deprecated, use --saveworld)
+	   --warn             Warn players before updating server
+	   --ifempty          Apply the update only if no players are connected
+	   --validate         Validates all DnL server files
+	   --saveworld        Saves world before update
+	   --update-mods      Updates installed and requested mods
+	   --backup           Takes a backup of the save files before updating
+	   --downloadonly     Download the mod and/or server update without applying it
+	                      Requires dnlStagingDir be set to a staging directory on the same filesystem as the server
+	   --no-download      Applies an already downloaded update from the staging directory
+	   --systemd          Use the SystemD dnlmanager@instance.service to restart the server
+	   --service          Use the sysv-init dnlmanager service to restart the server
+	   --upstart          Use the Upstart dnlmanager service to restart the server
+	   --no-autostart     Don't start the server after updating
+	   --warnreason=...   Specify an update reason other than the default
+
+	Stop and restart commands take the following options:
+	   --saveworld        Saves world before shutdown
+	   --warn             Warn players before stopping server
+	   --warnreason=...   Specify a shutdown reason other than the default
+
+	Start and restart commands take the following options:
+	   --noautoupdate     Disable any automatic update that may be enabled in the config
+	   --alwaysrestart    Always restart server on crash, even if it did not finish starting
+	   --no-background    Run the server without going into the background
+	   --dnlopt,opt=val   Add an DnL option:
+	      -opt=val        Equivalent to adding dnlopt_opt=val to config for this run
+	      -opt            Equivalent to adding dnlflag_opt=true to config for this run
+	      opt=val         Equivalent to adding dnl_opt=val to config for this run
+
+        installmod command takes the following options:
+	   --validate         Forcibly re-download the mod from the steam workshop
+
+	install-cronjob command takes the following options:
+	   --daily            Run once a day (default)
+	   --hourly           Run once an hour
+	   --hour=<hour>      Hour of the day to run command
+	   --minute=<min>     Minute of the hour to run command
+	   --enable-output    Don't redirect the output of the command
+	   --arg=option       Option to pass to command
+
+	list-instances command takes the following options:
+	   --brief            Only list instance names
+EOE
+}
+
+#---------------------
+# Main program
+#---------------------
+
+main(){
+  # check the configuration and throw errors or warnings if needed
+  checkConfig
+  
+  status=0
+
+  while true; do
+    options=( )
+    allinstances=no
+    instances=( )
+    args=( )
+    command="$1"
+    shift
+    nrarg=0
+
+    # Handle global options
+    case "$command" in
+      --verbose)
+        verbose=1
+        continue
+      ;;
+      --dots)
+        progressDisplayType=dots
+        continue
+      ;;
+      --spinner)
+        progressDisplayType=spinner
+        continue
+      ;;
+      --cronjob)
+        inCronJob=true
+        continue
+      ;;
+    esac
+
+    # get the number of arguments for commands that take arguments
+    case "$command" in
+      installmod) nrarg=1; ;;
+      uninstallmod) nrarg=1; ;;
+      reinstallmod) nrarg=1; ;;
+      enablemod) nrarg=1; ;;
+      disablemod) nrarg=1; ;;
+      broadcast) nrarg=1; ;;
+      rconcmd) nrarg=1; ;;
+      useconfig) nrarg=1; ;;
+      install-cronjob) nrarg=1; ;;
+      remove-cronjob) nrarg=1; ;;
+      remove-mods) nrarg=1; ;;
+    esac
+
+    # Enumerate the options and arguments
+    while [ $# -ne 0 ]; do
+      case "$1" in
+        --)
+          shift
+          break
+        ;;
+        --args)
+          nrarg=$#
+        ;;
+        --verbose)
+          verbose=1
+        ;;
+        --dots)
+          progressDisplayType=dots
+        ;;
+        --spinner)
+          progressDisplayType=spinner
+        ;;
+        --dnlopt,*)
+          addDnLOpt "${1#--dnlopt,}"
+        ;;
+        --*)
+          options+=( "$1" )
+        ;;
+        @all)
+          allinstances=yes
+        ;;
+        @*)
+          instances+=( "${1#@}" )
+        ;;
+        *)
+          if [ $nrarg -gt 0 ]; then
+            args+=( "$1" )
+            (( nrarg-- ))
+          else
+            break
+          fi
+        ;;
+      esac
+      shift
+    done
+
+    # handle non-instance separately
+    case "$command" in
+      upgrade-tools)
+        doUpgradeTools
+        exit
+      ;;
+      uninstall-tools)
+        doUninstallTools
+        exit
+      ;;
+      useconfig)
+        defaultinstance="${args[0]}"
+        continue
+      ;;
+      remove-mods)
+        doRemoveMods "${args[0]}"
+        if [ $# -eq 0 ]; then
+          exit 0
+        else
+          continue
+        fi
+      ;;
+      list-instances)
+        doListAllInstances "${options[@]}"
+        exit
+      ;;
+      --version)
+        echo "Version: ${dnlstVersion}"
+        echo "Channel: ${dnlstChannel}"
+        if [ -n "${dnlstCommit}" ]; then
+          echo "Commit: ${dnlstCommit:0:7}"
+        fi
+        if [ -n "${dnlstTag}" ]; then
+          echo "Release Tag: ${dnlstTag}"
+        fi
+        blobsize="$(sed "s@^\\(dnlst\\(Commit\\|Tag\\|RootUseEnv\\)\\)=.*@\\1=''@" "$0" | wc -c)"
+        echo "Blob SHA: $( (echo -ne "blob ${blobsize}\0"; sed "s@^\\(dnlst\\(Commit\\|Tag\\|RootUseEnv\\)\\)=.*@\\1=''@" "$0") | sha1sum | cut -d' ' -f1)"
+        exit 1
+      ;;
+      -h|--help)
+        showUsage
+        exit 1
+      ;;
+      "")
+        echo "dnlmanager v${dnlstVersion}: no command specified"
+        showUsage
+        exit 1
+      ;;
+    esac
+
+    # Handle no instances being specified
+    if [[ "${#instances[@]}" == 0 && "$allinstances" == "no" ]]; then
+      if [ -n "$defaultinstance" ]; then
+        instances=( "$defaultinstance" )
+      else
+        echo "No instances supplied for command ${command} ${options[*]} ${args[*]}"
+        read -p "Do you wish to run this command for all instances?" -n 1 -r
+        echo
+        if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+          allinstances=yes
+        else
+          exit 1
+        fi
+      fi
+    fi
+
+    # Handle cronjob commands specially
+    case "$command" in
+      install-cronjob)
+        doInstallCronJob "${args[@]}" "${options[@]}" "$@"
+        exit
+      ;;
+      remove-cronjob)
+        doRemoveCronJob "${args[@]}"
+        exit
+      ;;
+    esac
+
+    # Handle all instances being requested
+    if [[ "$allinstances" == "yes" ]]; then
+      instances=( $(getAllInstanceNames) )
+    fi
+
+    # Run the command for each instance requested
+    for instance in "${instances[@]}"; do
+    (
+      echo "Running command '${command}' for instance '${instance}'"
+      useConfig "$instance"
+      checkConfig "$command"
+
+      case "$command" in
+        run)
+          doRun
+        ;;
+        start)
+          doStart "${options[@]}"
+        ;;
+        stop)
+          doStop shutdown "${options[@]}"
+        ;;
+        restart)
+          doStop restart "${options[@]}"
+          echo "`timestamp`: stop" >> "$logdir/$dnlmanagerLog"
+        ;;
+        cancelshutdown)
+          doCancelShutdown "${options[@]}"
+        ;;
+        install)
+          doInstall
+        ;;
+        update)
+          doUpdate "${options[@]}"
+        ;;
+        checkupdate)
+          checkForUpdate
+        ;;
+        checkmodupdate)
+          checkForModUpdate "${options[@]}"
+        ;;
+        installmod)
+          doInstallMod "${args[@]}"
+        ;;
+        enablemod)
+          doEnableMod "${args[@]}"
+        ;;
+        disablemod)
+          doDisableMod "${args[@]}"
+        ;;
+        installmods)
+          doInstallAllMods
+        ;;
+        uninstallmods)
+          doUninstallAllMods
+        ;;
+        uninstallmod)
+          doUninstallMod "${args[@]}"
+        ;;
+        reinstallmod)
+          doUninstallMod "${args[@]}"
+          doInstallMod "${args[@]}"
+        ;;
+        backup)
+          doBackup
+        ;;
+        broadcast)
+          doBroadcast "${args[@]}"
+        ;;
+        saveworld)
+          doSaveWorld
+        ;;
+        rconcmd)
+          rconcmd "${args[@]}"
+        ;;
+        printconfig)
+          doPrintConfig
+        ;;
+        status)
+          printStatus
+        ;;
+        getpid)
+          echo `getServerPID`
+        ;;
+        *)
+          echo -n "dnlmanager v${dnlstVersion}: unknown command '$command' specified"
+          showUsage
+          exit 255
+        ;;
+      esac
+    )
+    laststatus=$?
+    if [ $laststatus -eq 255 ]; then
+      exit 1
+    elif [ $laststatus -ne 0 ]; then
+      status=$laststatus
+    fi
+    done
+
+    # Perform the restart portion of the restart command
+    if [[ "$command" == "restart" ]]; then
+      sleep 1
+      for instance in "${instances[@]}"; do
+      (
+        echo "`timestamp`: restart" >> "$logdir/$dnlmanagerLog"
+        useConfig "$instance"
+        doStart "${options[@]}"
+      )
+      done
+    fi
+
+    if [ $# -eq 0 ]; then
+      break
+    fi
+  done
+
+  exit $status
+}
+
+# Only execute main function if script is not being sourced
+# by another script
+if [[ "$(caller)" =~ ^0 ]]; then
+  main "$@"
+fi
+

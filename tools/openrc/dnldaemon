@@ -1,0 +1,37 @@
+#!/sbin/runscript
+# Short-Description: DnL manager deamon
+# Description:       DnL manager daemon used to start the server and keep it updated
+
+source /etc/dnlmanager/dnlmanager.cfg
+
+NAME="DNLServer"
+LOGFILE="${logdir}/${NAME}.log"
+DAEMON="/usr/bin/dnlmanager"
+
+depend(){
+    need net
+}
+
+start(){
+    INSTANCE="${RC_SVCNAME#*.}"
+    ebegin "Starting DnL manager daemon"
+    ulimit -n 100000
+    if [ "$INSTANCE" != "$RC_SVCNAME" ]; then
+        "$DAEMON" start "@${INSTANCE}"
+    else
+        "$DAEMON" start "@all"
+    fi
+    eend $?
+}
+
+stop(){
+    INSTANCE="${RC_SVCNAME#*.}"
+    ebegin "Stopping DnL manager daemon"
+    if [ "$INSTANCE" != "$RC_SVCNAME" ]; then
+        "$DAEMON" stop "@${INSTANCE}"
+    else
+        "$DAEMON" stop "@all"
+    fi
+    eend $?
+}
+

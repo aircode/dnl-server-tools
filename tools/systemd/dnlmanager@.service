@@ -1,0 +1,7 @@
+[Unit]
+Description=Daemon to start an dnl server instance
+
+[Service]
+User=steam
+ExecStart=/usr/bin/dnlmanager useconfig %i start --no-background
+Type=simple

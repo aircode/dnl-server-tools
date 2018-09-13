@@ -1,0 +1,14 @@
+#!/bin/bash
+
+DAEMON="/usr/bin/dnlmanager"
+
+for service in $(${DAEMON} list-instances --brief); do
+  case "$1" in
+    start)
+      systemctl start dnlmanager@${service}
+    ;;
+    stop)
+      systemctl stop dnlmanager@${service}
+    ;;
+  esac
+done
