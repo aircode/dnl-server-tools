@@ -1,3 +1,12 @@
+#!/bin/bash
+
+# DNL: Dark&Light manager
+# Based on https://github.com/FezVrasta
+# Original author:      LeXaT
+# Maintainer:           aircode
+# Contributors:         
+
+# Script version
 dnlstVersion='1.0'
 dnlstTag=''
 dnlstCommit=''
