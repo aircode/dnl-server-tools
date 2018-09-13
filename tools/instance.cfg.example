@@ -4,7 +4,7 @@ dnlserverroot="/home/steam/DnL"                                     # path of yo
 # DnL server options - use dnl_<optionname>=<value>
 # comment out these values if you want to define them
 # inside your GameUserSettings.ini file
-#serverMap="" 			                                            # server map (default)
+#serverMap="DNL_ALL" 			                                            # server map (default)
 #serverMapModId="469987622"                                         # Uncomment this to specify the Map Mod Id (<fileid> in http://steamcommunity.com/sharedfiles/filedetails/?id=<fileid>)
 #dnl_TotalConversionMod="496735411"                                 # Uncomment this to specify a total-conversion mod
 #dnl_RCONEnabled="True"                                              # Enable RCON Protocol
