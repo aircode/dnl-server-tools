@@ -298,12 +298,12 @@ checkConfig() {
       echo -e "[" "$YELLOW" "WARN" "$NORMAL" "]" "\tYour DnL server exec could not be found."
     fi
 
-    # SavedDnLs directory
+    # SavedDnL directory
     if [ -n "$dnlserverroot" ]; then
-      local saveddnlsdir="${dnlserverroot}/DNL/Saved/${dnl_AltSaveDirectoryName:-SavedDnLs}"
+      local saveddnlsdir="${dnlserverroot}/DNL/Saved/${dnl_AltSaveDirectoryName:-SavedDnL}"
       mkdir -p "${saveddnlsdir}"
       if [ ! -w "${saveddnlsdir}" ]; then
-        echo -e "[" "$RED" "ERROR" "$NORMAL" "]" "\tThe DnL SavedDnLs directory is not writable, and saveworld will fail"
+        echo -e "[" "$RED" "ERROR" "$NORMAL" "]" "\tThe DnL SavedDnL directory is not writable, and saveworld will fail"
       fi
     fi
 
@@ -684,8 +684,8 @@ function getServerMapFilename(){
 #
 # Gets the saved worlds directory
 #
-function getSavedDnLsDirectory(){
-  local savedir="SavedDnLs"
+function getSavedDnLDirectory(){
+  local savedir="SavedDnL"
   local saverootdir="$1"
 
   # Get save directory name
@@ -1793,7 +1793,7 @@ doUpdate() {
     if isTheServerRunning; then
       if [ "$updatetype" == "safe" ]; then
         saverootdir="${dnlserverroot}/DNL/Saved"
-        savedir="$(getSavedDnLsDirectory "${saverootdir}")"
+        savedir="$(getSavedDnLDirectory "${saverootdir}")"
         mapname="$(getServerMapName)"
         maxwait=30
 
@@ -2535,7 +2535,7 @@ doBackup(){
   local backupdirdaily="${dnlbackupdir}/${daystamp}"
   local saverootdir="${dnlserverroot}/DNL/Saved"
   local savedcfgdir="${saverootdir}/Config/WindowsServer"
-  local savedir="$(getSavedDnLsDirectory "${saverootdir}")"
+  local savedir="$(getSavedDnLDirectory "${saverootdir}")"
   local mapname="$(getServerMapName)"
   mkdir -p "$backupdir"
   mkdir -p "$backupdirdaily"
