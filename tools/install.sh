@@ -1,4 +1,5 @@
 #!/bin/bash
+#aircode V1
 
 userinstall=no
 steamcmd_user=
