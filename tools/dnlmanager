@@ -3,14 +3,16 @@
 # DnL manager
 #
 # Original author:      LeXaT
-# Maintainer:           Coyeks
-# Contributors:         Sispheor, Atriusftw, klightspeed, lexat, puseidr
+# Maintainer:           aircode
+# Contributors:         
+# BASED ON THE AUTHOR LeXaT & MAINTAINER Coyeks and his Contributors Sispheor, Atriusftw, klightspeed, lexat, puseidr
+# CREDITS go to ark-server-tools, they seem to be the base for this all 
 
 # Script version
-dnlstVersion='1.6'
+dnlstVersion='1.0'
 dnlstTag=''
 dnlstCommit=''
-dnlstGithubRepo="Coyeks/dnl-server-tools"
+dnlstGithubRepo="aircode/dnl-server-tools"
 dnlstRootUseEnv=''
 dnlstGlobalCfgFile='/etc/dnlmanager/dnlmanager.cfg'
 dnlstUserCfgFile='.dnlmanager.cfg'
@@ -935,7 +937,7 @@ doRun() {
   fi
 
   if [ -z "$dnlserveropts" ]; then
-    dnlserveropts="TheIsland"
+    dnlserveropts=""
   fi
 
   dnlextraopts=( )
