@@ -1736,7 +1736,7 @@ doUpdate() {
         rm -rf "$dnlStagingDir/DNL/Saved/"*
         rm -rf "$dnlStagingDir/Engine/Binaries/ThirdParty/SteamCMD/Linux/steamapps"
       fi
-      rm -f "$dnlStagingDir/DNL/Binaries/Linux/"*.txt
+      rm -f "$dnlStagingDir/DNL/Binaries/Win64/"*.txt
 
       if [ -z "$nodownload" ]; then
         echo -n "Downloading DnL update"
